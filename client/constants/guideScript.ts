@@ -41,7 +41,9 @@ function onHabitsSection(ctx: GuideContext, section: string): boolean {
 
 function anyHabitStreakAtLeast(ctx: GuideContext, days: number): boolean {
   return ctx.state.habits.some(
-    (habit) => computeHabitStreak(ctx.state.habitLogs, habit.id, ctx.todayKey) >= days
+    (habit) =>
+      computeHabitStreak(ctx.state.habitLogs, habit.id, ctx.todayKey, habit.timesPerDay) >=
+      days
   );
 }
 
@@ -134,7 +136,10 @@ export const GUIDE_SCRIPT: GuideBeat[] = [
     actions: [GOT_IT],
     message: () =>
       `that's your first completed habit. pearls are pearls — they all count toward something in the café.`,
-    match: (ctx) => Object.values(ctx.state.habitLogs).some((ids) => ids.length > 0),
+    match: (ctx) =>
+      Object.values(ctx.state.habitLogs).some((day) =>
+        Object.values(day).some((reps) => reps > 0)
+      ),
   },
   {
     id: 'first-habit-created',

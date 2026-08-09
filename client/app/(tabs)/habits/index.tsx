@@ -14,6 +14,12 @@ import { useRouter } from 'expo-router';
 import { useCafeState } from '../../../hooks/useCafeState';
 import { colors } from '../../../constants/colors';
 import { getDateKey } from '../../../utils/date';
+import {
+  dailyPearlTotal,
+  HABIT_TIERS,
+  pearlsForRep,
+  TIER_ORDER,
+} from '../../../constants/habitTiers';
 
 type HubSection =
   | 'hub'
@@ -88,10 +94,9 @@ export default function HabitsTab() {
     isLoading,
     setMission,
     claimMissionPearlsForToday,
-    addHabit,
-    removeHabit,
-    updateHabit,
-    toggleHabitForDate,
+    logHabitRep,
+    unlogHabitRep,
+    setPartialCountsAsDone,
     getHabitStreak,
     setGuideContext,
     addTodo,
@@ -103,25 +108,6 @@ export default function HabitsTab() {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedDateKey, setSelectedDateKey] = useState<string | null>(null);
   const [missionDraft, setMissionDraft] = useState(state.mission);
-
-  const [draftHabit, setDraftHabit] = useState<{
-    name: string;
-    description: string;
-    targetValue: string;
-    targetLabel: string;
-    reminderText: string;
-  } | null>(null);
-
-  const [openMenuHabitId, setOpenMenuHabitId] = useState<string | null>(null);
-  const [editingHabitId, setEditingHabitId] = useState<string | null>(null);
-  const [editDraft, setEditDraft] = useState<{
-    name: string;
-    description: string;
-    targetValue: string;
-    targetLabel: string;
-    reminderText: string;
-  } | null>(null);
-
   const [todoInput, setTodoInput] = useState('');
 
   useEffect(() => {
@@ -160,10 +146,11 @@ export default function HabitsTab() {
 
   for (let day = 1; day <= daysInMonth; day++) {
     const dateKey = getDateKey(year, month, day);
+    const dayLog = state.habitLogs[dateKey] ?? {};
     calendarDays.push({
       date: day,
       dateKey,
-      completedHabitIds: state.habitLogs[dateKey] ?? [],
+      completedHabitIds: Object.keys(dayLog).filter((id) => dayLog[id] > 0),
       isToday: dateKey === todayKey,
     });
   }
@@ -172,30 +159,31 @@ export default function HabitsTab() {
     selectedDateKey &&
     calendarDays.find((day) => day && day.dateKey === selectedDateKey);
 
-  const todaysCompletedIds = state.habitLogs[todayKey] ?? [];
   const monthName = currentDate.toLocaleDateString('en-US', {
     month: 'long',
     year: 'numeric',
   });
 
-  const currentHabitStreak = useMemo(() => {
-    let streak = 0;
-    const cursor = new Date();
+  const todayLog = state.habitLogs[todayKey] ?? {};
 
-    while (true) {
-      const key = getDateKey(
-        cursor.getFullYear(),
-        cursor.getMonth(),
-        cursor.getDate()
-      );
-      const completed = state.habitLogs[key] ?? [];
-      if (completed.length === 0) break;
-      streak += 1;
-      cursor.setDate(cursor.getDate() - 1);
-    }
+  // A habit counts toward the day's ring either on any progress or only at
+  // full cap, depending on the user's partial-credit preference.
+  const doneToday = state.habits.filter((habit) => {
+    const reps = todayLog[habit.id] ?? 0;
+    return state.preferences.partialCountsAsDone
+      ? reps > 0
+      : reps >= habit.timesPerDay;
+  }).length;
 
-    return streak;
-  }, [state.habitLogs]);
+  const habitsByTier = useMemo(
+    () =>
+      TIER_ORDER.map((tierId) => ({
+        tier: tierId,
+        def: HABIT_TIERS[tierId],
+        habits: state.habits.filter((habit) => habit.tier === tierId),
+      })).filter((group) => group.habits.length > 0),
+    [state.habits]
+  );
 
   const handlePrevMonth = () => {
     setCurrentDate(new Date(year, month - 1, 1));
@@ -235,79 +223,10 @@ export default function HabitsTab() {
     Alert.alert('Mission check-in complete', '+25 pearls');
   };
 
-  const handleConfirmDraftHabit = () => {
-    if (!draftHabit) return;
-
-    if (
-      !draftHabit.name.trim() ||
-      !draftHabit.targetValue.trim() ||
-      !draftHabit.targetLabel.trim()
-    ) {
-      Alert.alert('Missing info', 'Fill in the title, target value, and target unit.');
-      return;
-    }
-
-    const parsedValue = parseInt(draftHabit.targetValue, 10);
-    if (Number.isNaN(parsedValue) || parsedValue <= 0) {
-      Alert.alert('Invalid target', 'Enter a valid number for the target.');
-      return;
-    }
-
-    addHabit({
-      name: draftHabit.name.trim(),
-      description: draftHabit.description.trim(),
-      targetValue: parsedValue,
-      targetLabel: draftHabit.targetLabel.trim(),
-      reminderEnabled: !!draftHabit.reminderText.trim(),
-      reminderText: draftHabit.reminderText.trim(),
-      subhabits: [],
-    });
-
-    setDraftHabit(null);
-  };
-
-  const startEditingHabit = (habit: (typeof state.habits)[number]) => {
-    setEditingHabitId(habit.id);
-    setEditDraft({
-      name: habit.name,
-      description: habit.description,
-      targetValue: String(habit.targetValue),
-      targetLabel: habit.targetLabel,
-      reminderText: habit.reminderText,
-    });
-    setOpenMenuHabitId(null);
-  };
-
-  const saveEditedHabit = (habitId: string) => {
-    if (!editDraft) return;
-
-    if (
-      !editDraft.name.trim() ||
-      !editDraft.targetValue.trim() ||
-      !editDraft.targetLabel.trim()
-    ) {
-      Alert.alert('Missing info', 'Fill in the title, target value, and target unit.');
-      return;
-    }
-
-    const parsedValue = parseInt(editDraft.targetValue, 10);
-    if (Number.isNaN(parsedValue) || parsedValue <= 0) {
-      Alert.alert('Invalid target', 'Enter a valid number for the target.');
-      return;
-    }
-
-    updateHabit(habitId, {
-      name: editDraft.name.trim(),
-      description: editDraft.description.trim(),
-      targetValue: parsedValue,
-      targetLabel: editDraft.targetLabel.trim(),
-      reminderEnabled: !!editDraft.reminderText.trim(),
-      reminderText: editDraft.reminderText.trim(),
-      subhabits: [],
-    });
-
-    setEditingHabitId(null);
-    setEditDraft(null);
+  const handleLogRep = (habit: (typeof state.habits)[number]) => {
+    const reps = todayLog[habit.id] ?? 0;
+    if (reps >= habit.timesPerDay) return;
+    logHabitRep(todayKey, habit.id);
   };
 
   const renderHub = () => (
@@ -367,288 +286,150 @@ export default function HabitsTab() {
     </>
   );
 
-  const renderHabitCard = (habit: (typeof state.habits)[number], index: number) => {
-    const completed = todaysCompletedIds.includes(habit.id);
+  const renderHabitTile = (
+    habit: (typeof state.habits)[number],
+    wide: boolean
+  ) => {
+    const reps = todayLog[habit.id] ?? 0;
+    const cap = habit.timesPerDay;
+    const full = reps >= cap;
     const streak = getHabitStreak(habit.id);
-    const isEditing = editingHabitId === habit.id;
-
-    if (isEditing && editDraft) {
-      return (
-        <View key={habit.id} style={styles.habitCard}>
-          <Text style={styles.habitLabel}>Editing Habit {index + 1}</Text>
-
-          <TextInput
-            value={editDraft.name}
-            onChangeText={(text) => setEditDraft((prev) => prev ? { ...prev, name: text } : prev)}
-            placeholder="Habit title"
-            placeholderTextColor="#9A8D95"
-            style={styles.creatorInput}
-          />
-
-          <TextInput
-            value={editDraft.description}
-            onChangeText={(text) => setEditDraft((prev) => prev ? { ...prev, description: text } : prev)}
-            placeholder="Description (optional)"
-            placeholderTextColor="#9A8D95"
-            style={styles.creatorInput}
-          />
-
-
-
-          <TextInput
-            value={editDraft.targetValue}
-            onChangeText={(text) => setEditDraft((prev) => prev ? { ...prev, targetValue: text } : prev)}
-            placeholder="Target value"
-            keyboardType="number-pad"
-            placeholderTextColor="#9A8D95"
-            style={styles.creatorInput}
-          />
-
-          <TextInput
-            value={editDraft.targetLabel}
-            onChangeText={(text) => setEditDraft((prev) => prev ? { ...prev, targetLabel: text } : prev)}
-            placeholder="Target unit (e.g. times, minutes, pages)"
-            placeholderTextColor="#9A8D95"
-            style={styles.creatorInput}
-          />
-
-          <TextInput
-            value={editDraft.reminderText}
-            onChangeText={(text) => setEditDraft((prev) => prev ? { ...prev, reminderText: text } : prev)}
-            placeholder="Reminder note (optional)"
-            placeholderTextColor="#9A8D95"
-            style={styles.creatorInput}
-          />
-
-          <Pressable
-            onPress={() => saveEditedHabit(habit.id)}
-            style={({ pressed }) => [styles.addHabitButton, pressed && styles.bigPressed]}
-          >
-            <Text style={styles.addHabitButtonText}>Save Changes</Text>
-          </Pressable>
-
-          <Pressable
-            onPress={() => {
-              setEditingHabitId(null);
-              setEditDraft(null);
-            }}
-            style={({ pressed }) => [styles.menuButton, pressed && styles.smallPressed]}
-          >
-            <Text style={styles.menuButtonText}>Cancel</Text>
-          </Pressable>
-        </View>
-      );
-    }
+    const def = HABIT_TIERS[habit.tier];
 
     return (
-      <View key={habit.id} style={styles.habitCard}>
-        <View style={styles.habitTopRow}>
-          <Text style={styles.habitLabel}>Habit {index + 1}</Text>
-
-          <Pressable
-            onPress={() =>
-              setOpenMenuHabitId((prev) => (prev === habit.id ? null : habit.id))
-            }
-            style={({ pressed }) => [
-              styles.menuChip,
-              pressed && styles.smallPressed,
-            ]}
-          >
-            <Text style={styles.menuChipText}>Menu</Text>
-          </Pressable>
+      <Pressable
+        key={habit.id}
+        onPress={() => handleLogRep(habit)}
+        onLongPress={() => router.push(`/habit-form?id=${habit.id}`)}
+        delayLongPress={300}
+        style={({ pressed }) => [
+          styles.habitTile,
+          wide ? styles.habitTileWide : styles.habitTileHalf,
+          { borderColor: habit.color },
+          reps > 0 && { backgroundColor: habit.color },
+          full && styles.habitTileFull,
+          pressed && !full && styles.smallPressed,
+        ]}
+      >
+        <View style={styles.habitTileTop}>
+          <Text style={styles.habitTileName} numberOfLines={1}>
+            {habit.name || 'Untitled'}
+          </Text>
+          {full && <Text style={styles.habitTileCheck}>✓</Text>}
         </View>
 
-        <Pressable
-          onPress={() => {
-            if (!habit.name.trim()) return;
-            const reward = toggleHabitForDate(todayKey, habit.id);
-            if (!completed) {
-              Alert.alert('Habit logged', `+${reward} pearls`);
-            }
-          }}
-          style={({ pressed }) => [
-            styles.habitMainSurface,
-            completed && { borderColor: habit.color, backgroundColor: '#FFF' },
-            pressed && styles.smallPressed,
-          ]}
-        >
-          <View
-            style={[
-              styles.habitCheck,
-              completed && {
-                backgroundColor: habit.color,
-                borderColor: habit.color,
-              },
-            ]}
-          >
-            <Text style={[styles.habitCheckText, completed && { color: '#fff' }]}>
-              {completed ? '✓' : ''}
-            </Text>
-          </View>
-
-          <View style={styles.habitInfo}>
-            <Text style={styles.habitName}>{habit.name || 'Untitled habit'}</Text>
-
-            {!!habit.description.trim() && (
-              <Text style={styles.habitMeta}>{habit.description}</Text>
+        <View style={styles.habitTileBottom}>
+          <View style={styles.repDots}>
+            {Array.from({ length: cap }).map((_, index) => (
+              <View
+                key={index}
+                style={[
+                  styles.repDot,
+                  index < reps ? styles.repDotOn : styles.repDotOff,
+                ]}
+              />
+            ))}
+            {cap > 1 && (
+              <Text style={styles.repCount}>
+                {reps}/{cap}
+              </Text>
             )}
-
-            <Text style={styles.habitMeta}>
-              {habit.targetValue} {habit.targetLabel}
-            </Text>
-
-            {habit.reminderEnabled && !!habit.reminderText.trim() && (
-              <Text style={styles.habitMeta}>Reminder: {habit.reminderText}</Text>
-            )}
-
-            <Text style={styles.habitReward}>Reward: 5 + streak ({streak}) pearls</Text>
           </View>
-        </Pressable>
 
-        {openMenuHabitId === habit.id && (
-          <View style={styles.miniMenu}>
-            <Pressable
-              onPress={() => startEditingHabit(habit)}
-              style={({ pressed }) => [
-                styles.menuButton,
-                pressed && styles.smallPressed,
-              ]}
-            >
-              <Text style={styles.menuButtonText}>Edit</Text>
-            </Pressable>
-
-            <Pressable
-              onPress={() =>
-                Alert.alert(
-                  'Reminders',
-                  habit.reminderText
-                    ? `Reminder: ${habit.reminderText}`
-                    : 'No reminder set yet.'
-                )
-              }
-              style={({ pressed }) => [
-                styles.menuButton,
-                pressed && styles.smallPressed,
-              ]}
-            >
-              <Text style={styles.menuButtonText}>Reminders</Text>
-            </Pressable>
-
-            <Pressable
-              onPress={() =>
-                Alert.alert(
-                  'Subhabits',
-                  'Subhabits UI can be the next thing we add. The hook already supports expanding this.'
-                )
-              }
-              style={({ pressed }) => [
-                styles.menuButton,
-                pressed && styles.smallPressed,
-              ]}
-            >
-              <Text style={styles.menuButtonText}>Subhabits</Text>
-            </Pressable>
-
-            <Pressable
-              onPress={() => removeHabit(habit.id)}
-              style={({ pressed }) => [
-                styles.menuDeleteButton,
-                pressed && styles.smallPressed,
-              ]}
-            >
-              <Text style={styles.menuDeleteButtonText}>Delete</Text>
-            </Pressable>
-          </View>
-        )}
-      </View>
+          <Text style={styles.habitTileMeta}>
+            {streak > 0
+              ? `${streak}d`
+              : `+${pearlsForRep(habit.tier, habit.timesPerDay, reps + 1)}`}
+          </Text>
+        </View>
+      </Pressable>
     );
   };
 
   const renderHabits = () => (
-    <View style={styles.sectionCard}>
-      <Text style={styles.sectionHeader}>Habits</Text>
-      <Text style={styles.sectionSubheader}>
-        Tap a habit to log it. Add a new one from the bottom.
-      </Text>
+    <>
+      <View style={styles.todayCard}>
+        <View style={styles.todayTopRow}>
+          <Text style={styles.todayTitle}>Today</Text>
+          <Text style={styles.todayCount}>
+            {doneToday} of {state.habits.length} done
+          </Text>
+        </View>
 
-      {state.habits.map((habit, index) => renderHabitCard(habit, index))}
-
-      {draftHabit && (
-        <View style={styles.habitCard}>
-          <Text style={styles.habitLabel}>New Habit</Text>
-
-          <TextInput
-            value={draftHabit.name}
-            onChangeText={(text) => setDraftHabit((prev) => prev ? { ...prev, name: text } : prev)}
-            placeholder="Habit title"
-            placeholderTextColor="#9A8D95"
-            style={styles.creatorInput}
+        <View style={styles.progressTrack}>
+          <View
+            style={[
+              styles.progressFill,
+              {
+                width: `${
+                  state.habits.length
+                    ? Math.round((doneToday / state.habits.length) * 100)
+                    : 0
+                }%`,
+              },
+            ]}
           />
+        </View>
 
-          <TextInput
-            value={draftHabit.description}
-            onChangeText={(text) => setDraftHabit((prev) => prev ? { ...prev, description: text } : prev)}
-            placeholder="Description (optional)"
-            placeholderTextColor="#9A8D95"
-            style={styles.creatorInput}
-          />
-
-
-          <TextInput
-            value={draftHabit.targetValue}
-            onChangeText={(text) => setDraftHabit((prev) => prev ? { ...prev, targetValue: text } : prev)}
-            placeholder="Target value"
-            keyboardType="number-pad"
-            placeholderTextColor="#9A8D95"
-            style={styles.creatorInput}
-          />
-
-          <TextInput
-            value={draftHabit.targetLabel}
-            onChangeText={(text) => setDraftHabit((prev) => prev ? { ...prev, targetLabel: text } : prev)}
-            placeholder="Target unit (e.g. times, minutes, pages)"
-            placeholderTextColor="#9A8D95"
-            style={styles.creatorInput}
-          />
-
-          <TextInput
-            value={draftHabit.reminderText}
-            onChangeText={(text) => setDraftHabit((prev) => prev ? { ...prev, reminderText: text } : prev)}
-            placeholder="Reminder note (optional)"
-            placeholderTextColor="#9A8D95"
-            style={styles.creatorInput}
-          />
-
-          <Pressable
-            onPress={handleConfirmDraftHabit}
-            style={({ pressed }) => [styles.addHabitButton, pressed && styles.bigPressed]}
+        <Pressable
+          onPress={() => setPartialCountsAsDone(!state.preferences.partialCountsAsDone)}
+          style={({ pressed }) => [styles.prefRow, pressed && styles.smallPressed]}
+        >
+          <View
+            style={[
+              styles.prefCheck,
+              state.preferences.partialCountsAsDone && styles.prefCheckOn,
+            ]}
           >
-            <Text style={styles.addHabitButtonText}>Confirm Habit</Text>
-          </Pressable>
+            {state.preferences.partialCountsAsDone && (
+              <Text style={styles.prefCheckMark}>✓</Text>
+            )}
+          </View>
+          <Text style={styles.prefLabel}>
+            Count partial progress as done
+          </Text>
+        </Pressable>
+      </View>
+
+      {state.habits.length === 0 && (
+        <View style={styles.emptyCard}>
+          <Text style={styles.emptyTitle}>Start with one</Text>
+          <Text style={styles.emptyBody}>
+            Pick the single habit that would change the most if you actually did it
+            every day. You can add more later.
+          </Text>
         </View>
       )}
 
+      {habitsByTier.map((group) => (
+        <View key={group.tier} style={styles.tierSection}>
+          <View style={styles.tierHeader}>
+            <Text style={styles.tierHeaderLabel}>{group.def.label}</Text>
+            <Text style={styles.tierHeaderPearls}>
+              {group.def.pearls} pearls
+              {group.def.rewardModel === 'budget' ? '/day' : ' each'}
+            </Text>
+          </View>
+
+          <View style={styles.tileGrid}>
+            {group.habits.map((habit) =>
+              renderHabitTile(habit, group.tier === 'keystone')
+            )}
+          </View>
+        </View>
+      ))}
+
       <Pressable
-        onPress={() => {
-          if (draftHabit) return;
-          setDraftHabit({
-            name: '',
-            description: '',
-            targetValue: '',
-            targetLabel: '',
-            reminderText: '',
-          });
-        }}
-        style={({ pressed }) => [
-          styles.createHabitButton,
-          pressed && styles.bigPressed,
-        ]}
+        onPress={() => router.push('/habit-form')}
+        style={({ pressed }) => [styles.createHabitButton, pressed && styles.bigPressed]}
       >
-        <Text style={styles.createHabitButtonText}>
-          {draftHabit ? 'Finish current draft first' : '+ Create New Habit'}
-        </Text>
+        <Text style={styles.createHabitButtonText}>+ New habit</Text>
       </Pressable>
-    </View>
+
+      <Text style={styles.hintText}>
+        Tap a tile to log a rep. Hold to edit.
+      </Text>
+    </>
   );
 
   const renderMission = () => (
@@ -815,14 +596,18 @@ export default function HabitsTab() {
 
           {state.habits
             .filter((habit) => selectedDayData.completedHabitIds.includes(habit.id))
-            .map((habit) => (
-              <View key={habit.id} style={styles.calendarHabitRow}>
-                <Text style={styles.calendarHabitName}>{habit.name}</Text>
-                <Text style={styles.calendarHabitTag}>
-                  {habit.targetValue} {habit.targetLabel}
-                </Text>
-              </View>
-            ))}
+            .map((habit) => {
+              const reps =
+                state.habitLogs[selectedDayData.dateKey]?.[habit.id] ?? 0;
+              return (
+                <View key={habit.id} style={styles.calendarHabitRow}>
+                  <Text style={styles.calendarHabitName}>{habit.name}</Text>
+                  <Text style={styles.calendarHabitTag}>
+                    {reps}/{habit.timesPerDay} · {HABIT_TIERS[habit.tier].label}
+                  </Text>
+                </View>
+              );
+            })}
         </View>
       )}
     </>
@@ -1088,6 +873,139 @@ const styles = StyleSheet.create({
     marginBottom: 14,
   },
 
+  todayCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: '#F1D6E6',
+    padding: 16,
+    marginBottom: 14,
+  },
+  todayTopRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  todayTitle: { fontSize: 20, fontWeight: '800', color: '#5A4C60' },
+  todayCount: { fontSize: 12, color: '#8B7682', fontWeight: '700' },
+  progressTrack: {
+    height: 8,
+    backgroundColor: '#F6E7F0',
+    borderRadius: 999,
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: '100%',
+    backgroundColor: '#ED93B1',
+    borderRadius: 999,
+  },
+  prefRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 14,
+  },
+  prefCheck: {
+    width: 20,
+    height: 20,
+    borderRadius: 6,
+    borderWidth: 1.5,
+    borderColor: '#D8CBF8',
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  prefCheckOn: { backgroundColor: '#C8B6F2', borderColor: '#8B73CC' },
+  prefCheckMark: { fontSize: 12, fontWeight: '900', color: '#FFFFFF' },
+  prefLabel: { fontSize: 12, color: '#8B7682', fontWeight: '700' },
+
+  emptyCard: {
+    backgroundColor: '#FFF9FC',
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: '#F3D9E8',
+    padding: 18,
+    marginBottom: 14,
+  },
+  emptyTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#5D4E5D',
+    marginBottom: 6,
+  },
+  emptyBody: { fontSize: 13, color: '#8B7682', lineHeight: 19 },
+
+  tierSection: { marginBottom: 16 },
+  tierHeader: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+    paddingHorizontal: 4,
+  },
+  tierHeaderLabel: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#B58CAD',
+    textTransform: 'uppercase',
+    letterSpacing: 0.7,
+  },
+  tierHeaderPearls: { fontSize: 11, color: '#B58CAD', fontWeight: '700' },
+  tileGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  habitTile: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 18,
+    borderWidth: 1.5,
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+    minHeight: 66,
+    justifyContent: 'space-between',
+  },
+  habitTileWide: { width: '100%' },
+  habitTileHalf: { width: '48.4%' },
+  habitTileFull: { opacity: 0.72 },
+  habitTileTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  habitTileName: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#4E3226',
+    flex: 1,
+  },
+  habitTileCheck: { fontSize: 14, fontWeight: '900', color: '#4E3226' },
+  habitTileBottom: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  repDots: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  repDot: { width: 8, height: 8, borderRadius: 4 },
+  repDotOn: { backgroundColor: '#4E3226' },
+  repDotOff: { backgroundColor: 'rgba(78,50,38,0.16)' },
+  repCount: {
+    fontSize: 11,
+    color: '#6F5D67',
+    fontWeight: '700',
+    marginLeft: 2,
+  },
+  habitTileMeta: { fontSize: 11, color: '#6F5D67', fontWeight: '700' },
+  hintText: {
+    fontSize: 11,
+    color: '#B58CAD',
+    textAlign: 'center',
+    marginTop: 10,
+    fontWeight: '700',
+  },
+
   createHabitButton: {
     backgroundColor: '#BFE3F8',
     borderColor: '#8FC2E1',
@@ -1095,7 +1013,7 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     paddingVertical: 13,
     alignItems: 'center',
-    marginTop: 12,
+    marginTop: 4,
     shadowColor: '#7DB3D4',
     shadowOpacity: 0.35,
     shadowRadius: 0,

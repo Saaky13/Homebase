@@ -34,20 +34,31 @@ export function daysBetweenDateKeys(fromKey: string, toKey: string): number {
 }
 
 /**
- * Counts consecutive completed days for a habit, walking backward starting
- * at (and including) fromDateKey for as long as each day is present.
+ * Habit logs map a date key to per-habit rep counts for that day.
+ */
+export type HabitLogs = Record<string, Record<string, number>>;
+
+export function repsOn(logs: HabitLogs, dateKey: string, habitId: string): number {
+  return logs[dateKey]?.[habitId] ?? 0;
+}
+
+/**
+ * Counts consecutive *fully completed* days for a habit, walking backward
+ * starting at (and including) fromDateKey. A day only counts once the habit
+ * hit its full daily cap — partial progress keeps the pearls it earned but
+ * doesn't extend a streak.
  */
 export function computeHabitStreak(
-  habitLogs: Record<string, string[]>,
+  habitLogs: HabitLogs,
   habitId: string,
-  fromDateKey: string
+  fromDateKey: string,
+  timesPerDay: number
 ): number {
+  const cap = Math.max(1, timesPerDay);
   let streak = 0;
   let cursor = fromDateKey;
 
-  while (true) {
-    const completedIds = habitLogs[cursor] ?? [];
-    if (!completedIds.includes(habitId)) break;
+  while (repsOn(habitLogs, cursor, habitId) >= cap) {
     streak += 1;
     cursor = getPreviousDateKey(cursor);
   }
