@@ -4,8 +4,9 @@
     {
       "name": "cat-cafe-web",
       "runtimeExecutable": "sh",
-      "runtimeArgs": ["-c", "cd client && npm run web"],
-      "port": 8081
+      "runtimeArgs": ["-c", "cd client && npm run web -- --port 8090"],
+      "port": 8090,
+      "autoPort": false
     }
   ]
 }
