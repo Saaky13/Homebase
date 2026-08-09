@@ -12,7 +12,10 @@ import {
   daysBetweenDateKeys,
   getPreviousDateKey,
   getTodayDateKey,
+  repsOn,
+  HabitLogs,
 } from '../utils/date';
+import { HabitTier, HABIT_TIERS, pearlsForRep } from '../constants/habitTiers';
 
 export interface QueueCat {
   id: number;
@@ -28,11 +31,12 @@ export interface Habit {
   name: string;
   description: string;
   color: string;
-  targetLabel: string;
-  targetValue: number;
+  // Tier sets the pearl value per rep; timesPerDay caps how many reps a
+  // single day can pay out, which is what keeps tapping from minting pearls.
+  tier: HabitTier;
+  timesPerDay: number;
   reminderEnabled: boolean;
   reminderText: string;
-  subhabits: string[];
 }
 
 export interface TodoItem {
@@ -97,7 +101,12 @@ export interface CafeState {
   };
   visuals: CafeVisuals;
   habits: Habit[];
-  habitLogs: Record<string, string[]>;
+  habitLogs: HabitLogs;
+  preferences: {
+    // when true, any progress on a habit counts toward the day's completion
+    // ring; when false only hitting the full daily cap counts
+    partialCountsAsDone: boolean;
+  };
   dailyStats: Record<string, DailyStat>;
   guideContext: string;
   todos: TodoItem[];
@@ -147,6 +156,9 @@ const initialState: CafeState = {
   },
   habits: [],
   habitLogs: {},
+  preferences: {
+    partialCountsAsDone: false,
+  },
   dailyStats: {},
   guideContext: 'habits:hub',
   todos: [],
@@ -161,6 +173,66 @@ const initialState: CafeState = {
   },
   focusSessionActive: false,
 };
+
+/**
+ * Older saves stored habitLogs as dateKey -> habitId[] (a habit was either
+ * done or not). The rep-based model stores dateKey -> habitId -> count, so
+ * a legacy completion migrates to a single rep.
+ */
+function migrateHabitLogs(raw: unknown): HabitLogs {
+  if (!raw || typeof raw !== 'object') return {};
+
+  const out: HabitLogs = {};
+  Object.entries(raw as Record<string, unknown>).forEach(([dateKey, value]) => {
+    if (Array.isArray(value)) {
+      const day: Record<string, number> = {};
+      value.forEach((habitId) => {
+        if (typeof habitId === 'string') day[habitId] = 1;
+      });
+      out[dateKey] = day;
+    } else if (value && typeof value === 'object') {
+      const day: Record<string, number> = {};
+      Object.entries(value as Record<string, unknown>).forEach(([habitId, count]) => {
+        if (typeof count === 'number' && count > 0) day[habitId] = count;
+      });
+      out[dateKey] = day;
+    }
+  });
+
+  return out;
+}
+
+/**
+ * Older habits carried targetValue/targetLabel/subhabits instead of a tier
+ * and a daily cap. Anything missing lands on the middle tier at once a day.
+ */
+function migrateHabits(raw: unknown): Habit[] {
+  if (!Array.isArray(raw)) return [];
+
+  return raw.map((habit, index) => {
+    const tier: HabitTier =
+      habit?.tier === 'quick' || habit?.tier === 'keystone' || habit?.tier === 'anchor'
+        ? habit.tier
+        : 'anchor';
+
+    const rawTimes = Number(habit?.timesPerDay);
+    const timesPerDay =
+      Number.isFinite(rawTimes) && rawTimes > 0
+        ? Math.min(Math.round(rawTimes), HABIT_TIERS[tier].maxTimesPerDay)
+        : HABIT_TIERS[tier].defaultTimesPerDay;
+
+    return {
+      id: typeof habit?.id === 'string' ? habit.id : `habit-${Date.now()}-${index}`,
+      name: typeof habit?.name === 'string' ? habit.name : '',
+      description: typeof habit?.description === 'string' ? habit.description : '',
+      color: typeof habit?.color === 'string' ? habit.color : HABIT_COLORS[index % HABIT_COLORS.length],
+      tier,
+      timesPerDay,
+      reminderEnabled: !!habit?.reminderEnabled,
+      reminderText: typeof habit?.reminderText === 'string' ? habit.reminderText : '',
+    };
+  });
+}
 
 function ensureDailyStat(
   stats: Record<string, DailyStat>,
@@ -213,7 +285,9 @@ type CafeContextType = {
     updates: Partial<Omit<Habit, 'id' | 'color'>>
   ) => void;
   removeHabit: (habitId: string) => void;
-  toggleHabitForDate: (dateKey: string, habitId: string) => number;
+  logHabitRep: (dateKey: string, habitId: string) => number;
+  unlogHabitRep: (dateKey: string, habitId: string) => number;
+  setPartialCountsAsDone: (value: boolean) => void;
   getHabitStreak: (habitId: string, dateKey?: string) => number;
   addTodo: (text: string) => void;
   toggleTodo: (todoId: string) => void;
@@ -263,8 +337,12 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
                 ...(parsed.guide?.lastSeenAt ?? {}),
               },
             },
-            habits: Array.isArray(parsed.habits) ? parsed.habits : [],
-            habitLogs: parsed.habitLogs ?? {},
+            preferences: {
+              ...initialState.preferences,
+              ...(parsed.preferences ?? {}),
+            },
+            habits: migrateHabits(parsed.habits),
+            habitLogs: migrateHabitLogs(parsed.habitLogs),
             dailyStats: parsed.dailyStats ?? {},
             todos: Array.isArray(parsed.todos) ? parsed.todos : [],
             // never resume a "session in progress" flag across app restarts
@@ -605,9 +683,10 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
   const removeHabit = useCallback(
     (habitId: string) => {
       commit((prev) => {
-        const nextLogs: Record<string, string[]> = {};
-        Object.entries(prev.habitLogs).forEach(([dateKey, ids]) => {
-          nextLogs[dateKey] = ids.filter((id) => id !== habitId);
+        const nextLogs: HabitLogs = {};
+        Object.entries(prev.habitLogs).forEach(([dateKey, day]) => {
+          const { [habitId]: _removed, ...rest } = day;
+          nextLogs[dateKey] = rest;
         });
 
         return {
@@ -621,58 +700,139 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
   );
 
   const getHabitStreak = useCallback(
-    (habitId: string, dateKey?: string) =>
-      computeHabitStreak(state.habitLogs, habitId, dateKey ?? getTodayDateKey()),
-    [state.habitLogs]
+    (habitId: string, dateKey?: string) => {
+      const habit = state.habits.find((entry) => entry.id === habitId);
+      if (!habit) return 0;
+      return computeHabitStreak(
+        state.habitLogs,
+        habitId,
+        dateKey ?? getTodayDateKey(),
+        habit.timesPerDay
+      );
+    },
+    [state.habitLogs, state.habits]
   );
 
-  const toggleHabitForDate = useCallback(
+  /**
+   * Logs one rep. Returns the pearls awarded, or 0 if the habit already hit
+   * its daily cap — the cap is what stops repeated tapping from printing
+   * pearls. The streak bonus is paid once, on the rep that completes the day.
+   */
+  const logHabitRep = useCallback(
     (dateKey: string, habitId: string) => {
-      let reward = 0;
+      let awarded = 0;
 
       commit((prev) => {
-        const current = prev.habitLogs[dateKey] ?? [];
-        const alreadyDone = current.includes(habitId);
+        const habit = prev.habits.find((entry) => entry.id === habitId);
+        if (!habit) return prev;
+
+        const current = repsOn(prev.habitLogs, dateKey, habitId);
+        if (current >= habit.timesPerDay) return prev;
+
+        const nextReps = current + 1;
+        const completesDay = nextReps >= habit.timesPerDay;
+
+        // Prior streak is counted from the day *before* dateKey, since
+        // dateKey isn't complete until this very rep lands.
+        const priorStreak = completesDay
+          ? computeHabitStreak(
+              prev.habitLogs,
+              habitId,
+              getPreviousDateKey(dateKey),
+              habit.timesPerDay
+            )
+          : 0;
+
+        awarded =
+          pearlsForRep(habit.tier, habit.timesPerDay, nextReps) + priorStreak;
         const withDay = ensureDailyStat(prev.dailyStats, dateKey);
-
-        if (alreadyDone) {
-          return {
-            ...prev,
-            habitLogs: {
-              ...prev.habitLogs,
-              [dateKey]: current.filter((id) => id !== habitId),
-            },
-          };
-        }
-
-        // Streak bonus is based on consecutive days completed *before*
-        // dateKey — dateKey itself doesn't have this habit logged yet at
-        // this point, so counting from dateKey would always read as 0.
-        const priorStreak = computeHabitStreak(
-          prev.habitLogs,
-          habitId,
-          getPreviousDateKey(dateKey)
-        );
-        reward = 5 + priorStreak;
 
         return {
           ...prev,
-          pearls: prev.pearls + reward,
+          pearls: prev.pearls + awarded,
           habitLogs: {
             ...prev.habitLogs,
-            [dateKey]: [...current, habitId],
+            [dateKey]: { ...(prev.habitLogs[dateKey] ?? {}), [habitId]: nextReps },
           },
           dailyStats: {
             ...withDay,
             [dateKey]: {
               ...withDay[dateKey],
-              pearlsEarned: withDay[dateKey].pearlsEarned + reward,
+              pearlsEarned: withDay[dateKey].pearlsEarned + awarded,
             },
           },
         };
       });
 
-      return reward;
+      return awarded;
+    },
+    [commit]
+  );
+
+  /**
+   * Removes one rep and refunds exactly what that rep paid out, so
+   * un-logging and re-logging nets zero.
+   */
+  const unlogHabitRep = useCallback(
+    (dateKey: string, habitId: string) => {
+      let refunded = 0;
+
+      commit((prev) => {
+        const habit = prev.habits.find((entry) => entry.id === habitId);
+        if (!habit) return prev;
+
+        const current = repsOn(prev.habitLogs, dateKey, habitId);
+        if (current <= 0) return prev;
+
+        const wasComplete = current >= habit.timesPerDay;
+        const priorStreak = wasComplete
+          ? computeHabitStreak(
+              prev.habitLogs,
+              habitId,
+              getPreviousDateKey(dateKey),
+              habit.timesPerDay
+            )
+          : 0;
+
+        // Refund exactly what this specific rep paid out, so removing and
+        // re-adding a rep nets zero even on budget tiers with uneven splits.
+        refunded =
+          pearlsForRep(habit.tier, habit.timesPerDay, current) + priorStreak;
+
+        const nextDay = { ...(prev.habitLogs[dateKey] ?? {}) };
+        if (current - 1 <= 0) {
+          delete nextDay[habitId];
+        } else {
+          nextDay[habitId] = current - 1;
+        }
+
+        const withDay = ensureDailyStat(prev.dailyStats, dateKey);
+
+        return {
+          ...prev,
+          pearls: Math.max(0, prev.pearls - refunded),
+          habitLogs: { ...prev.habitLogs, [dateKey]: nextDay },
+          dailyStats: {
+            ...withDay,
+            [dateKey]: {
+              ...withDay[dateKey],
+              pearlsEarned: Math.max(0, withDay[dateKey].pearlsEarned - refunded),
+            },
+          },
+        };
+      });
+
+      return refunded;
+    },
+    [commit]
+  );
+
+  const setPartialCountsAsDone = useCallback(
+    (value: boolean) => {
+      commit((prev) => ({
+        ...prev,
+        preferences: { ...prev.preferences, partialCountsAsDone: value },
+      }));
     },
     [commit]
   );
@@ -788,7 +948,9 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
         addHabit,
         updateHabit,
         removeHabit,
-        toggleHabitForDate,
+        logHabitRep,
+        unlogHabitRep,
+        setPartialCountsAsDone,
         getHabitStreak,
         addTodo,
         toggleTodo,
