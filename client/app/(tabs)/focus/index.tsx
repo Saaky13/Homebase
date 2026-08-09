@@ -13,12 +13,14 @@ import {
 import { useCafeState } from '../../../hooks/useCafeState';
 import { CATS_DATA, REFLECTION_PROMPTS } from '../../../constants/cafeData';
 import { colors } from '../../../constants/colors';
+import { POPULARITY_GAINS } from '../../../constants/popularity';
 
 export default function FocusTab() {
   const {
     addPearl,
     addBoba,
     addCatToQueue,
+    addPopularity,
     updateState,
     state,
     resetCafe,
@@ -58,6 +60,7 @@ export default function FocusTab() {
 
         if (elapsedSecondsRef.current % 60 === 0) {
           addBoba('classic', 1);
+          addPopularity(POPULARITY_GAINS.focusPerMinute);
           updateState({
             totalFocusMinutes: state.totalFocusMinutes + 1,
           });
@@ -70,7 +73,15 @@ export default function FocusTab() {
     return () => {
       if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
     };
-  }, [isRunning, timerMinutes, addPearl, addBoba, updateState, state.totalFocusMinutes]);
+  }, [
+    isRunning,
+    timerMinutes,
+    addPearl,
+    addBoba,
+    addPopularity,
+    updateState,
+    state.totalFocusMinutes,
+  ]);
 
   const startFocusSession = () => {
     setGuideContext('focus:start');
