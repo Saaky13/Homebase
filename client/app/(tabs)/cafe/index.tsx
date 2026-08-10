@@ -5,10 +5,12 @@ import {
 } from 'react-native';
 import { colors } from '../../../constants/colors';
 import CafeCanvas from '../../../components/CafeCanvas';
+import PopularityMeter from '../../../components/PopularityMeter';
 
 export default function CafeTab() {
   return (
     <SafeAreaView style={styles.container}>
+      <PopularityMeter />
       <CafeCanvas />
     </SafeAreaView>
   );

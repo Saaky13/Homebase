@@ -41,12 +41,12 @@ export default function CurrencyBar() {
         bg={colors.lavender}
         border="#8B73CC"
       />
-      <CurrencyChip
-        label="Pop"
-        value={state.popularity}
-        bg={colors.blush}
-        border="#B86883"
-      />
+      {/*
+        Popularity deliberately does *not* live here. It cannot be spent, so
+        sitting alongside Coins and Pearls would read as a resource to hoard.
+        It belongs on the café screen next to the queue, where its causal link
+        to "cats are showing up" is visible — see PopularityMeter.
+      */}
     </View>
   );
 }

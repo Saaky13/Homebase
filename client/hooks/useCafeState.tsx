@@ -16,6 +16,13 @@ import {
   HabitLogs,
 } from '../utils/date';
 import { HabitTier, HABIT_TIERS, pearlsForRep } from '../constants/habitTiers';
+import {
+  cafeQualityMultiplier,
+  clampPopularity,
+  decayPopularity,
+  popularityForRep,
+  POPULARITY_GAINS,
+} from '../constants/popularity';
 
 export interface QueueCat {
   id: number;
@@ -110,7 +117,12 @@ export interface CafeState {
   reflectionLastClaimedDate: string | null;
   pearls: number;
   coins: number;
+  // Stored as a float and rounded up only for display — see constants/popularity.ts.
   popularity: number;
+  // Date key through which decay has already been applied. Decay is settled
+  // against today whenever popularity is read or written, so the value is
+  // always a function of days elapsed rather than of how often the app opens.
+  popularityLastDecayedDate: string | null;
   level: number;
   bobaInventory: {
     classic: number;
@@ -178,6 +190,7 @@ const initialState: CafeState = {
   pearls: 100,
   coins: 0,
   popularity: 0,
+  popularityLastDecayedDate: null,
   level: 1,
   bobaInventory: {
     classic: 0,
@@ -312,6 +325,35 @@ function restoreFocusTimer(raw: unknown): FocusTimer {
   };
 }
 
+/**
+ * Brings popularity up to date with today, applying one decay step per calendar
+ * day elapsed since it was last settled.
+ *
+ * Every read and every gain goes through this first, which is what makes decay
+ * a function of *days elapsed* rather than of app opens: settling twice in the
+ * same day is a no-op, and settling once after five days applies all five steps
+ * at once. Settling before a gain also means a rep logged today is never eroded
+ * by decay owed from yesterday.
+ */
+function settlePopularity(state: CafeState, todayKey: string): CafeState {
+  const lastSettled = state.popularityLastDecayedDate;
+
+  // First run (or a save from before popularity existed): adopt today as the
+  // baseline rather than retroactively decaying from an unknown date.
+  if (!lastSettled) {
+    return { ...state, popularityLastDecayedDate: todayKey };
+  }
+
+  const days = daysBetweenDateKeys(lastSettled, todayKey);
+  if (days <= 0) return state;
+
+  return {
+    ...state,
+    popularity: decayPopularity(state.popularity, days),
+    popularityLastDecayedDate: todayKey,
+  };
+}
+
 function ensureDailyStat(
   stats: Record<string, DailyStat>,
   dateKey: string
@@ -336,6 +378,12 @@ type CafeContextType = {
   // days since the previous app open, computed once at load time; null if
   // this is the first time the app has ever been opened
   daysSinceLastOpen: number | null;
+  // popularity lost to decay while the user was away, computed once at load
+  // time; null when nothing meaningful was lost. Surfaced on the café screen
+  // so the drop is legible rather than silent.
+  popularityLostWhileAway: number | null;
+  // current café quality multiplier, derived from owned decor and upgrades
+  cafeMultiplier: number;
   updateState: (updates: Partial<CafeState>) => void;
   resetCafe: () => Promise<void>;
   setUserName: (name: string) => void;
@@ -391,6 +439,9 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<CafeState>(initialState);
   const [isLoading, setIsLoading] = useState(true);
   const [daysSinceLastOpen, setDaysSinceLastOpen] = useState<number | null>(null);
+  const [popularityLostWhileAway, setPopularityLostWhileAway] = useState<
+    number | null
+  >(null);
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -449,10 +500,28 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
           previousOpenDateKey ? daysBetweenDateKeys(previousOpenDateKey, todayKey) : null
         );
 
-        setState({
-          ...merged,
-          guide: { ...merged.guide, lastOpenedDate: todayKey },
-        });
+        // Settle decay owed since the last session, and hold on to how much was
+        // lost so the café screen can surface it rather than silently showing a
+        // lower number.
+        const settled = settlePopularity(merged, todayKey);
+        const lost = merged.popularity - settled.popularity;
+        setPopularityLostWhileAway(lost >= 1 ? lost : null);
+
+        const next = {
+          ...settled,
+          guide: { ...settled.guide, lastOpenedDate: todayKey },
+        };
+
+        setState(next);
+
+        // Persist the settled value straight away rather than waiting for some
+        // later action to commit. The decay itself is self-correcting either
+        // way (it is a pure function of days since the anchor date), but
+        // leaving the anchor stale means every reload re-reports the same
+        // "while away" drop the user has already been shown.
+        if (saved) {
+          await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+        }
       } catch (error) {
         console.error('Failed to load state:', error);
       } finally {
@@ -498,6 +567,7 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
       await AsyncStorage.removeItem(STORAGE_KEY);
       setState({ ...initialState });
       setDaysSinceLastOpen(null);
+      setPopularityLostWhileAway(null);
     } catch (error) {
       console.error('Failed to reset state:', error);
     }
@@ -600,9 +670,26 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
     [commit]
   );
 
+  /**
+   * Adds popularity, scaling by the café quality multiplier.
+   *
+   * Callers pass the *base* amount from POPULARITY_GAINS; the multiplier is
+   * applied here so there is one place it can be got wrong rather than one per
+   * call site. Pass a negative amount to remove a gain.
+   */
   const addPopularity = useCallback(
-    (amount: number) => {
-      commit((prev) => ({ ...prev, popularity: prev.popularity + amount }));
+    (baseAmount: number) => {
+      const todayKey = getTodayDateKey();
+
+      commit((prev) => {
+        const settled = settlePopularity(prev, todayKey);
+        const gain = baseAmount * cafeQualityMultiplier(settled.unlockedItems);
+
+        return {
+          ...settled,
+          popularity: clampPopularity(settled.popularity + gain),
+        };
+      });
     },
     [commit]
   );
@@ -612,9 +699,20 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
       const todayKey = getTodayDateKey();
 
       commit((prev) => {
-        const withDay = ensureDailyStat(prev.dailyStats, todayKey);
+        const settled = settlePopularity(prev, todayKey);
+        const withDay = ensureDailyStat(settled.dailyStats, todayKey);
+
+        // NOTE: the README specifies popularity for cats served *promptly*, but
+        // wait time isn't tracked through this path yet, so every serve pays
+        // out. Gate this on wait time once cats have a patience timer.
+        const popularityGain =
+          POPULARITY_GAINS.catServed *
+          amount *
+          cafeQualityMultiplier(settled.unlockedItems);
+
         return {
-          ...prev,
+          ...settled,
+          popularity: clampPopularity(settled.popularity + popularityGain),
           dailyStats: {
             ...withDay,
             [todayKey]: {
@@ -868,15 +966,28 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
       completed = finished;
 
       const todayKey = getTodayDateKey();
-      const withDay = ensureDailyStat(prev.dailyStats, todayKey);
+
+      // Popularity used to be awarded per minute by the focus screen itself.
+      // It rides along with the boba credit now so the whole payout for a tick
+      // lands in one commit — and so decay is settled before the gain, which
+      // is what keeps a minute earned today from being eroded by decay owed
+      // from yesterday.
+      const settled = settlePopularity(prev, todayKey);
+      const popularityGain =
+        newBoba *
+        POPULARITY_GAINS.focusPerMinute *
+        cafeQualityMultiplier(settled.unlockedItems);
+
+      const withDay = ensureDailyStat(settled.dailyStats, todayKey);
 
       return {
-        ...prev,
-        pearls: prev.pearls + newPearls,
-        totalFocusMinutes: prev.totalFocusMinutes + newBoba,
+        ...settled,
+        pearls: settled.pearls + newPearls,
+        popularity: clampPopularity(settled.popularity + popularityGain),
+        totalFocusMinutes: settled.totalFocusMinutes + newBoba,
         bobaInventory: {
-          ...prev.bobaInventory,
-          classic: prev.bobaInventory.classic + newBoba,
+          ...settled.bobaInventory,
+          classic: settled.bobaInventory.classic + newBoba,
         },
         dailyStats: {
           ...withDay,
@@ -974,6 +1085,10 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
         const current = repsOn(prev.habitLogs, dateKey, habitId);
         if (current >= habit.timesPerDay) return prev;
 
+        // Settle decay before crediting the gain, so a rep logged today is
+        // never eaten by decay still owed from yesterday.
+        const settled = settlePopularity(prev, getTodayDateKey());
+
         const nextReps = current + 1;
         const completesDay = nextReps >= habit.timesPerDay;
 
@@ -981,7 +1096,7 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
         // dateKey isn't complete until this very rep lands.
         const priorStreak = completesDay
           ? computeHabitStreak(
-              prev.habitLogs,
+              settled.habitLogs,
               habitId,
               getPreviousDateKey(dateKey),
               habit.timesPerDay
@@ -990,14 +1105,19 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
 
         awarded =
           pearlsForRep(habit.tier, habit.timesPerDay, nextReps) + priorStreak;
-        const withDay = ensureDailyStat(prev.dailyStats, dateKey);
+        const withDay = ensureDailyStat(settled.dailyStats, dateKey);
+
+        const popularityGain =
+          popularityForRep(habit.tier, habit.timesPerDay) *
+          cafeQualityMultiplier(settled.unlockedItems);
 
         return {
-          ...prev,
-          pearls: prev.pearls + awarded,
+          ...settled,
+          pearls: settled.pearls + awarded,
+          popularity: clampPopularity(settled.popularity + popularityGain),
           habitLogs: {
-            ...prev.habitLogs,
-            [dateKey]: { ...(prev.habitLogs[dateKey] ?? {}), [habitId]: nextReps },
+            ...settled.habitLogs,
+            [dateKey]: { ...(settled.habitLogs[dateKey] ?? {}), [habitId]: nextReps },
           },
           dailyStats: {
             ...withDay,
@@ -1029,10 +1149,12 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
         const current = repsOn(prev.habitLogs, dateKey, habitId);
         if (current <= 0) return prev;
 
+        const settled = settlePopularity(prev, getTodayDateKey());
+
         const wasComplete = current >= habit.timesPerDay;
         const priorStreak = wasComplete
           ? computeHabitStreak(
-              prev.habitLogs,
+              settled.habitLogs,
               habitId,
               getPreviousDateKey(dateKey),
               habit.timesPerDay
@@ -1044,19 +1166,28 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
         refunded =
           pearlsForRep(habit.tier, habit.timesPerDay, current) + priorStreak;
 
-        const nextDay = { ...(prev.habitLogs[dateKey] ?? {}) };
+        // Popularity is reversed at the *current* multiplier. If the user
+        // bought decor between logging and un-logging, the reversal is slightly
+        // larger than the original gain — an acceptable drift, and not worth
+        // persisting a per-rep multiplier to avoid.
+        const popularityLoss =
+          popularityForRep(habit.tier, habit.timesPerDay) *
+          cafeQualityMultiplier(settled.unlockedItems);
+
+        const nextDay = { ...(settled.habitLogs[dateKey] ?? {}) };
         if (current - 1 <= 0) {
           delete nextDay[habitId];
         } else {
           nextDay[habitId] = current - 1;
         }
 
-        const withDay = ensureDailyStat(prev.dailyStats, dateKey);
+        const withDay = ensureDailyStat(settled.dailyStats, dateKey);
 
         return {
-          ...prev,
-          pearls: Math.max(0, prev.pearls - refunded),
-          habitLogs: { ...prev.habitLogs, [dateKey]: nextDay },
+          ...settled,
+          pearls: Math.max(0, settled.pearls - refunded),
+          popularity: clampPopularity(settled.popularity - popularityLoss),
+          habitLogs: { ...settled.habitLogs, [dateKey]: nextDay },
           dailyStats: {
             ...withDay,
             [dateKey]: {
@@ -1173,6 +1304,8 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
         state,
         isLoading,
         daysSinceLastOpen,
+        popularityLostWhileAway,
+        cafeMultiplier: cafeQualityMultiplier(state.unlockedItems),
         updateState,
         resetCafe,
         setUserName,
