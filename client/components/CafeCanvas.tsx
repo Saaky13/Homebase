@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
+  Image as RNImage,
   StyleSheet,
   Pressable,
   type LayoutChangeEvent,
@@ -47,6 +48,25 @@ type Table = {
 const DESIGN_WIDTH = 390;
 const DESIGN_HEIGHT = 844;
 
+/**
+ * Skia's useImage wants a URI. A bare require() gives back a numeric module id
+ * on native but an object on web, which useImage can't consume — it silently
+ * requested "/undefined" for every sprite. resolveAssetSource normalises both
+ * platforms to a real URI.
+ */
+const spriteUri = (mod: number) => RNImage.resolveAssetSource(mod).uri;
+
+const CAT_SPRITE_URIS = {
+  front: spriteUri(require('../assets/cats/cat_front.png')),
+  back: spriteUri(require('../assets/cats/cat_back.png')),
+  left: spriteUri(require('../assets/cats/cat_left.png')),
+  right: spriteUri(require('../assets/cats/cat_right.png')),
+  front_left: spriteUri(require('../assets/cats/cat_front_left.png')),
+  front_right: spriteUri(require('../assets/cats/cat_front_right.png')),
+  back_left: spriteUri(require('../assets/cats/cat_back_left.png')),
+  back_right: spriteUri(require('../assets/cats/cat_back_right.png')),
+};
+
 export default function CafeCanvas() {
   const catsRef = useRef<Cat[]>([]);
   const animationFrameRef = useRef<number | null>(null);
@@ -57,14 +77,14 @@ export default function CafeCanvas() {
   const spawnGroupRef = useRef<() => void>(() => {});
 
   // Skia decodes bundled assets off the JS thread; each is null until ready.
-  const catFront = useImage(require('../assets/cats/cat_front.png'));
-  const catBack = useImage(require('../assets/cats/cat_back.png'));
-  const catLeft = useImage(require('../assets/cats/cat_left.png'));
-  const catRight = useImage(require('../assets/cats/cat_right.png'));
-  const catFrontLeft = useImage(require('../assets/cats/cat_front_left.png'));
-  const catFrontRight = useImage(require('../assets/cats/cat_front_right.png'));
-  const catBackLeft = useImage(require('../assets/cats/cat_back_left.png'));
-  const catBackRight = useImage(require('../assets/cats/cat_back_right.png'));
+  const catFront = useImage(CAT_SPRITE_URIS.front);
+  const catBack = useImage(CAT_SPRITE_URIS.back);
+  const catLeft = useImage(CAT_SPRITE_URIS.left);
+  const catRight = useImage(CAT_SPRITE_URIS.right);
+  const catFrontLeft = useImage(CAT_SPRITE_URIS.front_left);
+  const catFrontRight = useImage(CAT_SPRITE_URIS.front_right);
+  const catBackLeft = useImage(CAT_SPRITE_URIS.back_left);
+  const catBackRight = useImage(CAT_SPRITE_URIS.back_right);
 
   useEffect(() => {
     catSpritesRef.current = {
