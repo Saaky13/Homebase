@@ -550,7 +550,9 @@ export const DIRECTION_FACING: Record<Direction, { facing: Facing; flip: boolean
 /**
  * Profile head. Same row count as HEAD so BODY_START, the pattern ellipses and
  * the tail offsets all keep their coordinates — only the silhouette changes.
- * The muzzle steps out on the left; the far ear reads as a notch behind.
+ * The skull is round and the chin is pulled back level with it. An earlier
+ * version stepped the jaw out and down towards the muzzle, which at this size
+ * stopped reading as a cheek and started reading as a snout.
  */
 const HEAD_SIDE: string[] = [
   '.....OO.....OO..........',
@@ -558,22 +560,22 @@ const HEAD_SIDE: string[] = [
   '....OBBO...OBBO.........',
   '...OBBBO..OBPBO.........',
   '...OBBBBOOBBPBO.........',
-  '...OBBBBBBBBPBBO........',
+  '..OBBBBBBBBBPBBO........',
   '..OBBBBBBBBBBBBO........',
-  '..OBBBBBBBBBBBBBO.......',
-  '.OBBBBBBBBBBBBBBO.......',
-  '.OBBBBBBBBBBBBBBO.......',
-  'OBBBBBBBBBBBBBBBO.......',
-  'OBBBBBBBBBBBBBBBO.......',
-  'OBBBBBBBBBBBBBBO........',
-  'OBBBBBBBBBBBBBBO........',
   '.OBBBBBBBBBBBBBO........',
-  '.OBBBBBBBBBBBBO.........',
+  '.OBBBBBBBBBBBBBBO.......',
+  'OBBBBBBBBBBBBBBBO.......',
+  'OBBBBBBBBBBBBBBBO.......',
+  'OBBBBBBBBBBBBBBBO.......',
+  'OBBBBBBBBBBBBBBBO.......',
+  'OBBBBBBBBBBBBBBBO.......',
+  '.OBBBBBBBBBBBBBBO.......',
+  '.OBBBBBBBBBBBBBO........',
+  '..OBBBBBBBBBBBBO........',
   '..OBBBBBBBBBBBO.........',
-  '..OBBBBBBBBBBO..........',
-  '...OBBBBBBBBO...........',
-  '....OBBBBBBO............',
-  '.....OOOOOO.............',
+  '...OBBBBBBBBBO..........',
+  '....OBBBBBBBO...........',
+  '.....OOOOOOO............',
 ];
 
 /**
