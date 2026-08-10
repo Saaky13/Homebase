@@ -1,3 +1,6 @@
+import type { SkImage } from '@shopify/react-native-skia';
+import type { Ctx2D } from './skiaCanvas2d';
+
 export type CatState =
   | 'walkingToLine'
   | 'waiting'
@@ -113,9 +116,9 @@ export function isCatOffscreen(cat: Cat, width: number, height: number) {
 }
 
 export function drawCat(
-  ctx: CanvasRenderingContext2D,
+  ctx: Ctx2D,
   cat: Cat,
-  sprites: Record<string, HTMLImageElement>
+  sprites: Record<string, SkImage | null>
 ) {
   const dx = cat.targetX - cat.x;
   const dy = cat.targetY - cat.y;
@@ -153,7 +156,9 @@ export function drawCat(
   );
   ctx.fill();
 
-  if (img && img.complete && img.naturalWidth !== 0) {
+  // Skia images are either fully decoded or null — there's no partially
+  // loaded state to guard against the way there was with HTMLImageElement.
+  if (img) {
     ctx.drawImage(
       img,
       cat.x - width / 2,

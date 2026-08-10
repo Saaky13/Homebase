@@ -1,7 +1,23 @@
-import React, { useEffect, useRef } from 'react';
-import { View, StyleSheet } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  Pressable,
+  type LayoutChangeEvent,
+} from 'react-native';
+import {
+  Canvas,
+  Group,
+  Picture,
+  Skia,
+  useImage,
+  type SkImage,
+} from '@shopify/react-native-skia';
+import { useSharedValue } from 'react-native-reanimated';
 import { colors } from '../constants/colors';
 import { useCafeState } from '../hooks/useCafeState';
+import { SkiaCanvas2D, type Ctx2D } from './skiaCanvas2d';
 import {
   createCat,
   updateCat,
@@ -25,14 +41,50 @@ type Table = {
   seatIndexes: number[];
 };
 
+// The café is authored against a fixed 390x844 coordinate space and scaled to
+// whatever the device actually gives us, so table and queue positions stay put
+// across screen sizes.
+const DESIGN_WIDTH = 390;
+const DESIGN_HEIGHT = 844;
+
 export default function CafeCanvas() {
-  const canvasRef = useRef<any>(null);
   const catsRef = useRef<Cat[]>([]);
   const animationFrameRef = useRef<number | null>(null);
   const autoSpawnTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const catSpritesRef = useRef<Record<string, HTMLImageElement>>({});
+  const catSpritesRef = useRef<Record<string, SkImage | null>>({});
   const pearlsRef = useRef(0);
   const popularityRef = useRef(0);
+  const spawnGroupRef = useRef<() => void>(() => {});
+
+  // Skia decodes bundled assets off the JS thread; each is null until ready.
+  const catFront = useImage(require('../assets/cats/cat_front.png'));
+  const catBack = useImage(require('../assets/cats/cat_back.png'));
+  const catLeft = useImage(require('../assets/cats/cat_left.png'));
+  const catRight = useImage(require('../assets/cats/cat_right.png'));
+  const catFrontLeft = useImage(require('../assets/cats/cat_front_left.png'));
+  const catFrontRight = useImage(require('../assets/cats/cat_front_right.png'));
+  const catBackLeft = useImage(require('../assets/cats/cat_back_left.png'));
+  const catBackRight = useImage(require('../assets/cats/cat_back_right.png'));
+
+  useEffect(() => {
+    catSpritesRef.current = {
+      front: catFront,
+      back: catBack,
+      left: catLeft,
+      right: catRight,
+      front_left: catFrontLeft,
+      front_right: catFrontRight,
+      back_left: catBackLeft,
+      back_right: catBackRight,
+    };
+  }, [catFront, catBack, catLeft, catRight, catFrontLeft, catFrontRight, catBackLeft, catBackRight]);
+
+  // The frame is published as a SharedValue so Skia repaints without a React
+  // re-render on each of the 60 frames per second.
+  const picture = useSharedValue(Skia.PictureRecorder().finishRecordingAsPicture());
+
+  const [layout, setLayout] = useState({ width: DESIGN_WIDTH, height: DESIGN_HEIGHT });
+  const [canServe, setCanServe] = useState(false);
 
   const { state, addCoins, spendPearls, addDrinkServed } = useCafeState();
 
@@ -212,34 +264,8 @@ export default function CafeCanvas() {
   };
 
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const width = 390;
-    const height = 844;
-
-    canvas.width = width;
-    canvas.height = height;
-
-    const loadImage = (src: string) => {
-      const img = new Image();
-      img.src = src;
-      return img;
-    };
-
-    catSpritesRef.current = {
-      front: loadImage('/cat_pics/cat_front.png'),
-      back: loadImage('/cat_pics/cat_back.png'),
-      left: loadImage('/cat_pics/cat_left.png'),
-      right: loadImage('/cat_pics/cat_right.png'),
-      front_left: loadImage('/cat_pics/cat_front_left.png'),
-      front_right: loadImage('/cat_pics/cat_front_right.png'),
-      back_left: loadImage('/cat_pics/cat_back_left.png'),
-      back_right: loadImage('/cat_pics/cat_back_right.png'),
-    };
+    const width = DESIGN_WIDTH;
+    const height = DESIGN_HEIGHT;
 
     const spawnGroupInternal = () => {
       const queueCats = getQueueCats();
@@ -286,43 +312,14 @@ export default function CafeCanvas() {
 
     scheduleNextSpawn();
 
-    const handleCanvasClick = (event: MouseEvent) => {
-      const rect = canvas.getBoundingClientRect();
-      const scaleX = width / rect.width;
-      const scaleY = height / rect.height;
-
-      const clickX = (event.clientX - rect.left) * scaleX;
-      const clickY = (event.clientY - rect.top) * scaleY;
-
-      const spawnButton = { x: width - 74, y: height - 84, width: 52, height: 52 };
-      const serveButton = { x: width - 92, y: 24, width: 72, height: 40 };
-
-      const clickedSpawn =
-        clickX >= spawnButton.x &&
-        clickX <= spawnButton.x + spawnButton.width &&
-        clickY >= spawnButton.y &&
-        clickY <= spawnButton.y + spawnButton.height;
-
-      const clickedServe =
-        clickX >= serveButton.x &&
-        clickX <= serveButton.x + serveButton.width &&
-        clickY >= serveButton.y &&
-        clickY <= serveButton.y + serveButton.height;
-
-      if (clickedSpawn) {
-        spawnGroupInternal();
-        return;
-      }
-
-      if (clickedServe && canServeFrontGroup()) {
-        serveFrontGroup();
-      }
-    };
-
-    canvas.addEventListener('click', handleCanvasClick);
+    spawnGroupRef.current = spawnGroupInternal;
 
     const render = () => {
-      ctx.clearRect(0, 0, width, height);
+      // Each frame is recorded into a fresh picture rather than mutated in
+      // place, which is what lets Skia hand it to the render thread.
+      const recorder = Skia.PictureRecorder();
+      const skCanvas = recorder.beginRecording(Skia.XYWHRect(0, 0, width, height));
+      const ctx: Ctx2D = new SkiaCanvas2D(skCanvas);
 
       catsRef.current.forEach((cat) => {
         if (
@@ -353,8 +350,12 @@ export default function CafeCanvas() {
 
       catsRef.current.forEach((cat) => drawCat(ctx, cat, catSpritesRef.current));
 
-      drawSpawnButton(ctx, width, height);
-      drawServeButton(ctx, width, canServeFrontGroup());
+      picture.value = recorder.finishRecordingAsPicture();
+
+      // Drive the Serve button's enabled state from the simulation, but only
+      // touch React state when it actually flips.
+      const servable = canServeFrontGroup();
+      setCanServe((prev) => (prev === servable ? prev : servable));
 
       animationFrameRef.current = requestAnimationFrame(render);
     };
@@ -362,69 +363,55 @@ export default function CafeCanvas() {
     render();
 
     return () => {
-      canvas.removeEventListener('click', handleCanvasClick);
       if (animationFrameRef.current !== null) cancelAnimationFrame(animationFrameRef.current);
       if (autoSpawnTimeoutRef.current) clearTimeout(autoSpawnTimeoutRef.current);
     };
-  }, [state.visuals, addCoins, spendPearls, addDrinkServed]);
+  }, [state.visuals, addCoins, spendPearls, addDrinkServed, picture]);
+
+  const handleLayout = (event: LayoutChangeEvent) => {
+    const { width, height } = event.nativeEvent.layout;
+    if (width > 0 && height > 0) setLayout({ width, height });
+  };
 
   return (
-    <View style={styles.container}>
-      <canvas ref={canvasRef} style={styles.canvas} />
+    <View style={styles.container} onLayout={handleLayout}>
+      <Canvas style={styles.fill}>
+        <Group
+          transform={[
+            { scaleX: layout.width / DESIGN_WIDTH },
+            { scaleY: layout.height / DESIGN_HEIGHT },
+          ]}
+        >
+          <Picture picture={picture} />
+        </Group>
+      </Canvas>
+
+      {/* Controls are real views rather than painted into the canvas, so they
+          get native touch handling and screen-reader labels for free. */}
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Serve the next group of cats"
+        disabled={!canServe}
+        onPress={serveFrontGroup}
+        style={({ pressed }) => [
+          styles.serveButton,
+          !canServe && styles.serveButtonDisabled,
+          pressed && styles.buttonPressed,
+        ]}
+      >
+        <Text style={styles.serveButtonText}>Serve</Text>
+      </Pressable>
+
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Spawn a group of cats"
+        onPress={() => spawnGroupRef.current()}
+        style={({ pressed }) => [styles.spawnButton, pressed && styles.buttonPressed]}
+      >
+        <Text style={styles.spawnButtonText}>+</Text>
+      </Pressable>
     </View>
   );
-}
-
-function drawServeButton(
-  ctx: CanvasRenderingContext2D,
-  width: number,
-  canServe: boolean
-) {
-  const x = width - 92;
-  const y = 24;
-  const w = 72;
-  const h = 40;
-
-  ctx.fillStyle = canServe ? '#63B97C' : '#A8C9B1';
-  ctx.beginPath();
-  ctx.roundRect(x, y, w, h, 16);
-  ctx.fill();
-
-  ctx.strokeStyle = 'rgba(0,0,0,0.10)';
-  ctx.lineWidth = 2;
-  ctx.stroke();
-
-  ctx.fillStyle = '#FFF';
-  ctx.font = 'bold 16px monospace';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText('Serve', x + w / 2, y + h / 2 + 1);
-}
-
-function drawSpawnButton(
-  ctx: CanvasRenderingContext2D,
-  width: number,
-  height: number
-) {
-  const x = width - 74;
-  const y = height - 84;
-  const w = 52;
-  const h = 52;
-
-  ctx.fillStyle = '#E88973';
-  ctx.beginPath();
-  ctx.roundRect(x, y, w, h, 16);
-  ctx.fill();
-
-  ctx.strokeStyle = 'rgba(0,0,0,0.12)';
-  ctx.lineWidth = 2;
-  ctx.stroke();
-
-  ctx.fillStyle = '#FFF';
-  ctx.font = 'bold 30px monospace';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText('+', x + w / 2, y + h / 2 + 1);
 }
 
 const styles = StyleSheet.create({
@@ -433,10 +420,33 @@ const styles = StyleSheet.create({
     backgroundColor: colors.cream,
     overflow: 'hidden',
   },
-  canvas: {
-    width: '100%',
-    height: '100%',
-    display: 'block' as any,
-    outlineStyle: 'none' as any,
+  fill: {
+    flex: 1,
   },
+  serveButton: {
+    position: 'absolute',
+    top: 24,
+    right: 20,
+    width: 72,
+    height: 40,
+    borderRadius: 16,
+    backgroundColor: '#63B97C',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  serveButtonDisabled: { backgroundColor: '#A8C9B1' },
+  serveButtonText: { color: '#FFFFFF', fontSize: 15, fontWeight: '800' },
+  spawnButton: {
+    position: 'absolute',
+    bottom: 32,
+    right: 22,
+    width: 52,
+    height: 52,
+    borderRadius: 16,
+    backgroundColor: '#E88973',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  spawnButtonText: { color: '#FFFFFF', fontSize: 28, fontWeight: '800', lineHeight: 32 },
+  buttonPressed: { transform: [{ translateY: 2 }], opacity: 0.9 },
 });
