@@ -2,11 +2,11 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
-  Image as RNImage,
   StyleSheet,
   Pressable,
   type LayoutChangeEvent,
 } from 'react-native';
+import { Asset } from 'expo-asset';
 import {
   Canvas,
   Group,
@@ -49,12 +49,12 @@ const DESIGN_WIDTH = 390;
 const DESIGN_HEIGHT = 844;
 
 /**
- * Skia's useImage wants a URI. A bare require() gives back a numeric module id
- * on native but an object on web, which useImage can't consume — it silently
- * requested "/undefined" for every sprite. resolveAssetSource normalises both
- * platforms to a real URI.
+ * Skia's useImage wants a URI. A bare require() is a numeric module id on
+ * native but an object on web, which useImage can't consume — it silently
+ * requested "/undefined" for every sprite. expo-asset normalises both
+ * platforms to a real URI (react-native-web has no resolveAssetSource).
  */
-const spriteUri = (mod: number) => RNImage.resolveAssetSource(mod).uri;
+const spriteUri = (mod: number) => Asset.fromModule(mod).uri;
 
 const CAT_SPRITE_URIS = {
   front: spriteUri(require('../assets/cats/cat_front.png')),
