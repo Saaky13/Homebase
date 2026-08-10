@@ -11,17 +11,17 @@ import {
   View,
 } from 'react-native';
 import { useRouter } from 'expo-router';
-import { useCafeState } from '../../../hooks/useCafeState';
-import { colors } from '../../../constants/colors';
-import { getReflectionPromptForDate } from '../../../constants/cafeData';
-import FocusSection from '../../../components/FocusSection';
-import { getDateKey } from '../../../utils/date';
+import { useCafeState } from '../../hooks/useCafeState';
+import { colors } from '../../constants/colors';
+import { getReflectionPromptForDate } from '../../constants/cafeData';
+import FocusSection from '../../components/FocusSection';
+import { getDateKey } from '../../utils/date';
 import {
   dailyPearlTotal,
   HABIT_TIERS,
   pearlsForRep,
   TIER_ORDER,
-} from '../../../constants/habitTiers';
+} from '../../constants/habitTiers';
 
 type HubSection =
   | 'hub'
