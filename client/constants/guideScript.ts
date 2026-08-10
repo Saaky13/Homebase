@@ -200,7 +200,7 @@ export const GUIDE_SCRIPT: GuideBeat[] = [
     priority: 40,
     actions: [GOT_IT],
     message: (ctx) =>
-      `this is your growth hub, ${ctx.name}. habits, mission, calendar, to-dos — everything that isn't the café lives here. start with one habit, just one.`,
+      `this is your growth hub, ${ctx.name}. habits, mission, focus, reflection, calendar, to-dos — everything that isn't the café lives here. start with one habit, just one.`,
     match: (ctx) => onHabitsSection(ctx, 'hub'),
   },
   {
@@ -224,10 +224,20 @@ export const GUIDE_SCRIPT: GuideBeat[] = [
     match: (ctx) => onHabitsSection(ctx, 'todo'),
   },
   {
+    id: 'reflection-first-visit',
+    icon: '🌙',
+    title: 'close the day out',
+    priority: 37,
+    actions: [GOT_IT],
+    message: () =>
+      `one question, once a day, and it's a different one every morning. answer it honestly rather than generously — the pearls land either way.`,
+    match: (ctx) => onHabitsSection(ctx, 'reflection'),
+  },
+  {
     id: 'resources-first-visit',
     icon: '📚',
     title: 'still brewing',
-    priority: 37,
+    priority: 36,
     actions: [GOT_IT],
     message: () =>
       `nothing here yet, but this is where guides, articles, and frameworks will eventually live. for now, focus is still the best resource you've got.`,
@@ -237,17 +247,19 @@ export const GUIDE_SCRIPT: GuideBeat[] = [
     id: 'focus-first-visit',
     icon: '⏱️',
     title: 'the brew starts here',
-    priority: 36,
+    priority: 35,
     actions: [GOT_IT],
     message: (ctx) =>
       `every minute you focus becomes boba in your café, ${ctx.name}. start with something small — 5 minutes counts. cats are already lining up outside.`,
-    match: (ctx) => ctx.pathname.includes('/focus'),
+    // Focus used to be its own tab; it's a Growth Hub section now, so this
+    // keys off the section rather than the route.
+    match: (ctx) => onHabitsSection(ctx, 'focus'),
   },
   {
     id: 'cafe-first-visit',
     icon: '☕',
     title: 'the floor is yours',
-    priority: 35,
+    priority: 34,
     actions: [GOT_IT],
     message: (ctx) =>
       `this is the café floor, ${ctx.name}. cats queue up, you serve them, they pay in coins. no pearls, no boba — so if the line's empty, go focus first.`,
@@ -257,7 +269,7 @@ export const GUIDE_SCRIPT: GuideBeat[] = [
     id: 'shop-first-visit',
     icon: '🛍️',
     title: 'spend it well',
-    priority: 34,
+    priority: 33,
     actions: [GOT_IT],
     message: () =>
       `coins turn into new cats, flavors, and decor here. everything you unlock sticks around and changes how your café looks.`,
@@ -288,7 +300,7 @@ export const GUIDE_SCRIPT: GuideBeat[] = [
     repeatable: true,
     cooldownHours: 20,
     actions: [
-      { label: 'start focusing', kind: 'navigate', path: '/focus' },
+      { label: 'start focusing', kind: 'navigate', path: '/habits' },
       { label: 'not yet', kind: 'dismiss' },
     ],
     message: () =>

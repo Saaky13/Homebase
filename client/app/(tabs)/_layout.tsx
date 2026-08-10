@@ -30,7 +30,7 @@ export default function TabLayout() {
         <Tabs.Screen
           name="habits/index"
           options={{
-            title: 'Habits',
+            title: 'Growth Hub',
             tabBarIcon: ({ color, size }) => (
               <MaterialCommunityIcons name="calendar-check" size={size} color={color} />
             ),
@@ -54,16 +54,6 @@ export default function TabLayout() {
             title: 'Shop',
             tabBarIcon: ({ color, size }) => (
               <MaterialCommunityIcons name="store" size={size} color={color} />
-            ),
-          }}
-        />
-
-        <Tabs.Screen
-          name="focus/index"
-          options={{
-            title: 'Focus',
-            tabBarIcon: ({ color, size }) => (
-              <MaterialCommunityIcons name="timer-outline" size={size} color={color} />
             ),
           }}
         />

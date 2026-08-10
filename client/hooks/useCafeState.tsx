@@ -77,10 +77,37 @@ export interface GuideState {
   lastAcknowledgedLevel: number;
 }
 
+/**
+ * The focus timer lives in global state rather than in the Focus screen so a
+ * running session survives leaving the section — the Focus view is now one of
+ * the Growth Hub's sections, which unmounts whenever you navigate away.
+ *
+ * `endsAt` is an absolute timestamp rather than a decrementing counter: it
+ * means the clock stays correct across unmounts, app restarts, and a
+ * throttled/backgrounded interval, instead of drifting by however many ticks
+ * were missed.
+ */
+export interface FocusTimer {
+  // length of the session the user selected, in seconds
+  durationSeconds: number;
+  // authoritative remaining time while paused; while running, remaining is
+  // derived from endsAt instead
+  remainingSeconds: number;
+  // ms epoch when the session is due to finish; null whenever it isn't running
+  endsAt: number | null;
+  isRunning: boolean;
+  // elapsed seconds already paid out, so re-entering the section or reloading
+  // never pays for the same minute twice
+  creditedSeconds: number;
+}
+
 export interface CafeState {
   userName: string;
   mission: string;
   missionLastClaimedDate: string | null;
+  // the daily reflection pays out once per calendar day, same as the mission
+  // check-in; this is the day it was last answered
+  reflectionLastClaimedDate: string | null;
   pearls: number;
   coins: number;
   popularity: number;
@@ -114,6 +141,7 @@ export interface CafeState {
   // true while a focus session is actively running, so the guide overlay
   // knows to stay out of the way
   focusSessionActive: boolean;
+  focusTimer: FocusTimer;
 }
 
 const STORAGE_KEY = '@focus_cafe_state_v2';
@@ -127,10 +155,26 @@ const HABIT_COLORS = [
   '#EAA4B4',
 ];
 
+export const DEFAULT_FOCUS_MINUTES = 25;
+
+// One boba per minute focused, one pearl per five — the rates the café economy
+// is built on, kept here because the timer now settles its own payouts.
+const SECONDS_PER_BOBA = 60;
+const SECONDS_PER_PEARL = 300;
+
+const idleFocusTimer = (minutes = DEFAULT_FOCUS_MINUTES): FocusTimer => ({
+  durationSeconds: minutes * 60,
+  remainingSeconds: minutes * 60,
+  endsAt: null,
+  isRunning: false,
+  creditedSeconds: 0,
+});
+
 const initialState: CafeState = {
   userName: '',
   mission: '',
   missionLastClaimedDate: null,
+  reflectionLastClaimedDate: null,
   pearls: 100,
   coins: 0,
   popularity: 0,
@@ -172,6 +216,7 @@ const initialState: CafeState = {
     lastAcknowledgedLevel: 1,
   },
   focusSessionActive: false,
+  focusTimer: idleFocusTimer(),
 };
 
 /**
@@ -234,6 +279,39 @@ function migrateHabits(raw: unknown): Habit[] {
   });
 }
 
+/**
+ * Rebuilds the focus timer from a save. Anything malformed or missing falls
+ * back to a fresh idle timer, and a session that was mid-run always comes back
+ * paused — see the call site for why offline time is never credited.
+ */
+function restoreFocusTimer(raw: unknown): FocusTimer {
+  if (!raw || typeof raw !== 'object') return idleFocusTimer();
+
+  const saved = raw as Partial<FocusTimer>;
+  const duration = Number(saved.durationSeconds);
+  if (!Number.isFinite(duration) || duration <= 0) return idleFocusTimer();
+
+  const credited = Number(saved.creditedSeconds);
+  const storedRemaining = Number(saved.remainingSeconds);
+
+  // While running, remaining was only ever derived from endsAt, so recompute
+  // it against the clock rather than trusting the last written value.
+  const remaining =
+    saved.isRunning && typeof saved.endsAt === 'number'
+      ? Math.max(0, Math.round((saved.endsAt - Date.now()) / 1000))
+      : storedRemaining;
+
+  return {
+    durationSeconds: duration,
+    remainingSeconds: Number.isFinite(remaining)
+      ? Math.min(Math.max(0, remaining), duration)
+      : duration,
+    endsAt: null,
+    isRunning: false,
+    creditedSeconds: Number.isFinite(credited) ? Math.max(0, credited) : 0,
+  };
+}
+
 function ensureDailyStat(
   stats: Record<string, DailyStat>,
   dateKey: string
@@ -264,6 +342,15 @@ type CafeContextType = {
   setGuideContext: (context: string) => void;
   setMission: (mission: string) => void;
   claimMissionPearlsForToday: (dateKey: string) => boolean;
+  claimReflectionForToday: (dateKey: string, pearls: number) => boolean;
+  setFocusDuration: (minutes: number) => void;
+  startFocusTimer: () => void;
+  pauseFocusTimer: () => void;
+  resetFocusTimer: () => void;
+  // Advances the timer against the wall clock and pays out any whole minutes
+  // that just completed. Returns true on the tick that finishes the session so
+  // the screen can fire its one-off celebration.
+  settleFocusTimer: () => boolean;
   addPearl: (amount?: number) => void;
   spendPearls: (amount: number) => boolean;
   addCoins: (amount: number) => void;
@@ -341,6 +428,12 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
               ...initialState.preferences,
               ...(parsed.preferences ?? {}),
             },
+            // A session that was still running when the app closed comes back
+            // paused, with the clock advanced to reflect real elapsed time but
+            // nothing credited for it. Paying out time spent with the app shut
+            // would let you earn boba by closing the app, which is exactly
+            // backwards from what the timer is meant to reward.
+            focusTimer: restoreFocusTimer(parsed.focusTimer),
             habits: migrateHabits(parsed.habits),
             habitLogs: migrateHabitLogs(parsed.habitLogs),
             dailyStats: parsed.dailyStats ?? {},
@@ -651,6 +744,158 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
     [commit]
   );
 
+  /**
+   * Pays out the daily reflection exactly once per calendar day. The pearl
+   * amount comes from the option the user picked, so the guard has to live
+   * here rather than in the screen — otherwise a double tap pays twice.
+   */
+  const claimReflectionForToday = useCallback(
+    (dateKey: string, pearls: number) => {
+      let success = false;
+
+      commit((prev) => {
+        if (prev.reflectionLastClaimedDate === dateKey) return prev;
+
+        const withDay = ensureDailyStat(prev.dailyStats, dateKey);
+        success = true;
+
+        return {
+          ...prev,
+          pearls: prev.pearls + pearls,
+          reflectionLastClaimedDate: dateKey,
+          dailyStats: {
+            ...withDay,
+            [dateKey]: {
+              ...withDay[dateKey],
+              pearlsEarned: withDay[dateKey].pearlsEarned + pearls,
+            },
+          },
+        };
+      });
+
+      return success;
+    },
+    [commit]
+  );
+
+  const setFocusDuration = useCallback(
+    (minutes: number) => {
+      commit((prev) => ({
+        ...prev,
+        focusSessionActive: false,
+        focusTimer: idleFocusTimer(minutes),
+      }));
+    },
+    [commit]
+  );
+
+  const startFocusTimer = useCallback(() => {
+    commit((prev) => {
+      const timer = prev.focusTimer;
+      if (timer.isRunning || timer.remainingSeconds <= 0) return prev;
+
+      return {
+        ...prev,
+        focusSessionActive: true,
+        focusTimer: {
+          ...timer,
+          isRunning: true,
+          endsAt: Date.now() + timer.remainingSeconds * 1000,
+        },
+      };
+    });
+  }, [commit]);
+
+  const pauseFocusTimer = useCallback(() => {
+    commit((prev) => {
+      const timer = prev.focusTimer;
+      if (!timer.isRunning || timer.endsAt === null) return prev;
+
+      return {
+        ...prev,
+        focusSessionActive: false,
+        focusTimer: {
+          ...timer,
+          isRunning: false,
+          endsAt: null,
+          remainingSeconds: Math.max(
+            0,
+            Math.round((timer.endsAt - Date.now()) / 1000)
+          ),
+        },
+      };
+    });
+  }, [commit]);
+
+  const resetFocusTimer = useCallback(() => {
+    commit((prev) => ({
+      ...prev,
+      focusSessionActive: false,
+      focusTimer: idleFocusTimer(prev.focusTimer.durationSeconds / 60),
+    }));
+  }, [commit]);
+
+  /**
+   * One atomic step of the clock. Rewards are derived from total elapsed time
+   * measured against creditedSeconds rather than incremented per tick, so a
+   * missed or doubled interval can never over- or under-pay: whatever the gap,
+   * the next settle pays exactly the minutes that actually elapsed.
+   */
+  const settleFocusTimer = useCallback(() => {
+    let completed = false;
+
+    commit((prev) => {
+      const timer = prev.focusTimer;
+      if (!timer.isRunning || timer.endsAt === null) return prev;
+
+      const remaining = Math.max(
+        0,
+        Math.round((timer.endsAt - Date.now()) / 1000)
+      );
+      const elapsed = Math.min(
+        timer.durationSeconds,
+        timer.durationSeconds - remaining
+      );
+
+      const newBoba =
+        Math.floor(elapsed / SECONDS_PER_BOBA) -
+        Math.floor(timer.creditedSeconds / SECONDS_PER_BOBA);
+      const newPearls =
+        Math.floor(elapsed / SECONDS_PER_PEARL) -
+        Math.floor(timer.creditedSeconds / SECONDS_PER_PEARL);
+
+      const finished = remaining <= 0;
+      completed = finished;
+
+      const todayKey = getTodayDateKey();
+      const withDay = ensureDailyStat(prev.dailyStats, todayKey);
+
+      return {
+        ...prev,
+        pearls: prev.pearls + newPearls,
+        totalFocusMinutes: prev.totalFocusMinutes + newBoba,
+        bobaInventory: {
+          ...prev.bobaInventory,
+          classic: prev.bobaInventory.classic + newBoba,
+        },
+        dailyStats: {
+          ...withDay,
+          [todayKey]: {
+            ...withDay[todayKey],
+            drinksMade: withDay[todayKey].drinksMade + newBoba,
+            pearlsEarned: withDay[todayKey].pearlsEarned + newPearls,
+          },
+        },
+        focusSessionActive: !finished,
+        focusTimer: finished
+          ? idleFocusTimer(timer.durationSeconds / 60)
+          : { ...timer, remainingSeconds: remaining, creditedSeconds: elapsed },
+      };
+    });
+
+    return completed;
+  }, [commit]);
+
   const addHabit = useCallback(
     (habit: Omit<Habit, 'id' | 'color'>) => {
       commit((prev) => ({
@@ -934,6 +1179,12 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
         setGuideContext,
         setMission,
         claimMissionPearlsForToday,
+        claimReflectionForToday,
+        setFocusDuration,
+        startFocusTimer,
+        pauseFocusTimer,
+        resetFocusTimer,
+        settleFocusTimer,
         addPearl,
         spendPearls,
         addCoins,
