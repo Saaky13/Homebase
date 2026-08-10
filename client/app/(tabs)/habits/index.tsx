@@ -13,6 +13,8 @@ import {
 import { useRouter } from 'expo-router';
 import { useCafeState } from '../../../hooks/useCafeState';
 import { colors } from '../../../constants/colors';
+import { getReflectionPromptForDate } from '../../../constants/cafeData';
+import FocusSection from '../../../components/FocusSection';
 import { getDateKey } from '../../../utils/date';
 import {
   dailyPearlTotal,
@@ -25,6 +27,8 @@ type HubSection =
   | 'hub'
   | 'habits'
   | 'mission'
+  | 'reflection'
+  | 'focus'
   | 'calendar'
   | 'resources'
   | 'todo';
@@ -42,12 +46,16 @@ function ThreeDButton({
   emoji,
   colorStyle,
   onPress,
+  dimmed,
 }: {
   title: string;
   subtitle: string;
   emoji: string;
   colorStyle: any;
   onPress: () => void;
+  // a dimmed tile still opens its section — it just signals "nothing left to
+  // do here today", the way a completed habit tile fades out
+  dimmed?: boolean;
 }) {
   const pressedY = useRef(new Animated.Value(0)).current;
 
@@ -75,7 +83,7 @@ function ThreeDButton({
           onPress={onPress}
           onPressIn={pressIn}
           onPressOut={pressOut}
-          style={[styles.tileFace, colorStyle]}
+          style={[styles.tileFace, colorStyle, dimmed && styles.tileDimmed]}
         >
           <View style={styles.tileGloss} />
           <Text style={styles.tileEmoji}>{emoji}</Text>
@@ -94,6 +102,7 @@ export default function HabitsTab() {
     isLoading,
     setMission,
     claimMissionPearlsForToday,
+    claimReflectionForToday,
     logHabitRep,
     unlogHabitRep,
     setPartialCountsAsDone,
@@ -229,6 +238,22 @@ export default function HabitsTab() {
     logHabitRep(todayKey, habit.id);
   };
 
+  const reflectionPrompt = getReflectionPromptForDate(todayKey);
+  const reflectedToday = state.reflectionLastClaimedDate === todayKey;
+
+  const handleReflectionAnswer = (option: { pearls: number }) => {
+    if (reflectedToday) return;
+
+    const success = claimReflectionForToday(todayKey, option.pearls);
+
+    if (!success) {
+      Alert.alert('Not available', 'You already reflected today.');
+      return;
+    }
+
+    Alert.alert('Reflection logged', `+${option.pearls} pearls`);
+  };
+
   const renderHub = () => (
     <>
       <View style={styles.heroCard}>
@@ -255,6 +280,14 @@ export default function HabitsTab() {
           onPress={() => setSection('mission')}
         />
         <ThreeDButton
+          title="Reflection"
+          subtitle={reflectedToday ? 'Done for today' : 'Close the day'}
+          emoji="☾"
+          colorStyle={styles.tileButter}
+          dimmed={reflectedToday}
+          onPress={() => setSection('reflection')}
+        />
+        <ThreeDButton
           title="Calendar"
           subtitle="Track days"
           emoji="☷"
@@ -273,7 +306,7 @@ export default function HabitsTab() {
           subtitle="Start a session"
           emoji="⏱"
           colorStyle={styles.tileMint}
-          onPress={() => router.push('/focus')}
+          onPress={() => setSection('focus')}
         />
         <ThreeDButton
           title="Resources"
@@ -476,6 +509,41 @@ export default function HabitsTab() {
             : 'Daily Check-In (+25 pearls)'}
         </Text>
       </Pressable>
+    </View>
+  );
+
+  const renderReflection = () => (
+    <View style={styles.sectionCard}>
+      <Text style={styles.sectionHeader}>Daily Reflection</Text>
+      <Text style={styles.sectionSubheader}>
+        One honest question a day. It changes every morning, and answering pays
+        out once.
+      </Text>
+
+      <View style={[styles.reflectionPromptCard, reflectedToday && styles.dimmedButton]}>
+        <Text style={styles.reflectionQuestion}>{reflectionPrompt.question}</Text>
+
+        {reflectionPrompt.options.map((option) => (
+          <Pressable
+            key={option.id}
+            onPress={() => handleReflectionAnswer(option)}
+            disabled={reflectedToday}
+            style={({ pressed }) => [
+              styles.reflectionOption,
+              pressed && !reflectedToday && styles.smallPressed,
+            ]}
+          >
+            <Text style={styles.reflectionOptionText}>{option.label}</Text>
+            <Text style={styles.reflectionOptionPearls}>+{option.pearls}</Text>
+          </Pressable>
+        ))}
+      </View>
+
+      <Text style={styles.reflectionFootnote}>
+        {reflectedToday
+          ? 'Already reflected today — a new question lands tomorrow.'
+          : 'Pick the one that is true, not the one worth the most.'}
+      </Text>
     </View>
   );
 
@@ -704,6 +772,8 @@ export default function HabitsTab() {
         {section === 'hub' && renderHub()}
         {section === 'habits' && renderHabits()}
         {section === 'mission' && renderMission()}
+        {section === 'reflection' && renderReflection()}
+        {section === 'focus' && <FocusSection />}
         {section === 'calendar' && renderCalendar()}
         {section === 'todo' && renderTodo()}
         {section === 'resources' && renderResources()}
@@ -835,6 +905,14 @@ const styles = StyleSheet.create({
     backgroundColor: '#DDF8F2',
     borderColor: '#9FDCCB',
     shadowColor: '#8ED4BE',
+  },
+  tileButter: {
+    backgroundColor: '#FFF0BE',
+    borderColor: '#E4C983',
+    shadowColor: '#DDBE72',
+  },
+  tileDimmed: {
+    opacity: 0.55,
   },
   tileEmoji: {
     fontSize: 22,
@@ -1235,6 +1313,57 @@ const styles = StyleSheet.create({
     color: '#6A4560',
     fontWeight: '800',
     fontSize: 13,
+  },
+
+  reflectionPromptCard: {
+    backgroundColor: '#FFFCF2',
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: '#F0E0BB',
+    padding: 14,
+  },
+  reflectionQuestion: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#5D4E5D',
+    lineHeight: 21,
+    marginBottom: 12,
+  },
+  reflectionOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#EBD9AF',
+    paddingHorizontal: 14,
+    paddingVertical: 13,
+    marginBottom: 8,
+    shadowColor: '#DDBE72',
+    shadowOpacity: 0.3,
+    shadowRadius: 0,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 4,
+  },
+  reflectionOptionText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#5D4E5D',
+    flex: 1,
+  },
+  reflectionOptionPearls: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#A98A3F',
+  },
+  reflectionFootnote: {
+    fontSize: 11,
+    color: '#B58CAD',
+    fontWeight: '700',
+    textAlign: 'center',
+    marginTop: 12,
   },
 
   calendarTopBar: {

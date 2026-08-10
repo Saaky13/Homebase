@@ -120,6 +120,21 @@ export const REFLECTION_PROMPTS = [
   },
 ];
 
+/**
+ * Picks the prompt for a given day. Rotating on the date key means every
+ * prompt gets used across the week instead of the list sitting dead behind
+ * index 0, and it stays stable for the whole day so re-opening the section
+ * doesn't reshuffle the question mid-answer.
+ */
+export function getReflectionPromptForDate(dateKey: string) {
+  const [year, month, day] = dateKey.split('-').map(Number);
+  const daysSinceEpoch = Math.floor(Date.UTC(year, month - 1, day) / 86400000);
+  const index =
+    ((daysSinceEpoch % REFLECTION_PROMPTS.length) + REFLECTION_PROMPTS.length) %
+    REFLECTION_PROMPTS.length;
+  return REFLECTION_PROMPTS[index];
+}
+
 export const CAFE_LEVELS = [
   { level: 1, name: 'Just Opening', emoji: '🧋', description: 'A tiny café just starting out' },
   { level: 2, name: 'Growing', emoji: '☕', description: 'More customers, more charm' },
