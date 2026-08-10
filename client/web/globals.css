@@ -12,10 +12,24 @@ body {
   min-height: 100vh;
 }
 
+/*
+ * Phone-shaped frame for the web preview. The size is capped to the
+ * viewport so the app never overflows its own frame — at a fixed 844px
+ * the tab bar and currency bar got clipped out of view on shorter
+ * windows, which reads as "the buttons stopped working".
+ */
 #root {
-  width: 390px;
-  height: 844px;
+  width: min(390px, 100vw);
+  height: min(844px, 100vh);
   box-shadow: 0 0 40px rgba(0, 0, 0, 0.5);
   border-radius: 40px;
   overflow: hidden;
+}
+
+/* Drop the rounded frame once it's filling the screen. */
+@media (max-width: 390px), (max-height: 844px) {
+  #root {
+    border-radius: 0;
+    box-shadow: none;
+  }
 }

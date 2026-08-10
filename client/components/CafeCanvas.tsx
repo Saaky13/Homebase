@@ -18,6 +18,7 @@ import {
   drawCafeBackground,
   drawSeatingAreas,
 } from './cafeRender';
+import { spawnIntervalMs, maxGroupSize } from '../constants/popularity';
 
 type Table = {
   id: string;
@@ -28,15 +29,22 @@ export default function CafeCanvas() {
   const canvasRef = useRef<any>(null);
   const catsRef = useRef<Cat[]>([]);
   const animationFrameRef = useRef<number | null>(null);
-  const autoSpawnIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const autoSpawnTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const catSpritesRef = useRef<Record<string, HTMLImageElement>>({});
   const pearlsRef = useRef(0);
+  const popularityRef = useRef(0);
 
   const { state, addCoins, spendPearls, addDrinkServed } = useCafeState();
 
   useEffect(() => {
     pearlsRef.current = state.pearls;
   }, [state.pearls]);
+
+  // Held in a ref so spawn pacing tracks popularity without re-running the
+  // main effect, which would tear down the canvas listeners and render loop.
+  useEffect(() => {
+    popularityRef.current = state.popularity;
+  }, [state.popularity]);
 
   const getQueueCats = () =>
     catsRef.current.filter(
@@ -237,7 +245,9 @@ export default function CafeCanvas() {
       const queueCats = getQueueCats();
       const queueSpots = getQueueSpots(width);
 
-      const requestedGroupSize = 1 + Math.floor(Math.random() * 3);
+      // Busier cafés draw bigger groups, not just more of them.
+      const sizeCap = maxGroupSize(popularityRef.current);
+      const requestedGroupSize = 1 + Math.floor(Math.random() * sizeCap);
       const availableQueueSlots = queueSpots.length - queueCats.length;
       const actualGroupSize = Math.min(requestedGroupSize, availableQueueSlots);
       if (actualGroupSize <= 0) return;
@@ -263,7 +273,18 @@ export default function CafeCanvas() {
       }
     };
 
-    autoSpawnIntervalRef.current = setInterval(spawnGroupInternal, 60000);
+    // Self-rescheduling rather than a fixed interval, so each wait is computed
+    // from *current* popularity: a thriving café fills up fast, a neglected one
+    // slows to a trickle — but never to nothing, so there is always something
+    // to come back to.
+    const scheduleNextSpawn = () => {
+      autoSpawnTimeoutRef.current = setTimeout(() => {
+        spawnGroupInternal();
+        scheduleNextSpawn();
+      }, spawnIntervalMs(popularityRef.current));
+    };
+
+    scheduleNextSpawn();
 
     const handleCanvasClick = (event: MouseEvent) => {
       const rect = canvas.getBoundingClientRect();
@@ -343,7 +364,7 @@ export default function CafeCanvas() {
     return () => {
       canvas.removeEventListener('click', handleCanvasClick);
       if (animationFrameRef.current !== null) cancelAnimationFrame(animationFrameRef.current);
-      if (autoSpawnIntervalRef.current) clearInterval(autoSpawnIntervalRef.current);
+      if (autoSpawnTimeoutRef.current) clearTimeout(autoSpawnTimeoutRef.current);
     };
   }, [state.visuals, addCoins, spendPearls, addDrinkServed]);
 
