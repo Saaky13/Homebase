@@ -511,24 +511,208 @@ function addSparkles(g: Grid, points: Array<[number, number]>): void {
   }
 }
 
+/* ------------------------------------------------------------------ */
+/* Facing                                                              */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The five authored viewing angles. Everything else is a horizontal mirror of
+ * one of these, so a new angle costs one silhouette rather than one per cat —
+ * grids hold colour keys, so a facing is pure geometry and every cat in the
+ * roster inherits it for free.
+ *
+ * Sided facings are authored looking LEFT; `mirrorGrid` produces the right.
+ */
+export type Facing = 'front' | 'front_side' | 'side' | 'back_side' | 'back';
+
+/** The eight directions the movement code resolves to. */
+export type Direction =
+  | 'front'
+  | 'front_left'
+  | 'front_right'
+  | 'left'
+  | 'right'
+  | 'back_left'
+  | 'back_right'
+  | 'back';
+
+export const DIRECTION_FACING: Record<Direction, { facing: Facing; flip: boolean }> = {
+  front: { facing: 'front', flip: false },
+  front_left: { facing: 'front_side', flip: false },
+  front_right: { facing: 'front_side', flip: true },
+  left: { facing: 'side', flip: false },
+  right: { facing: 'side', flip: true },
+  back_left: { facing: 'back_side', flip: false },
+  back_right: { facing: 'back_side', flip: true },
+  back: { facing: 'back', flip: false },
+};
+
+/**
+ * Profile head. Same row count as HEAD so BODY_START, the pattern ellipses and
+ * the tail offsets all keep their coordinates — only the silhouette changes.
+ * The muzzle steps out on the left; the far ear reads as a notch behind.
+ */
+const HEAD_SIDE: string[] = [
+  '.....OO.....OO..........',
+  '....OBBO...OBBO.........',
+  '....OBBO...OBBO.........',
+  '...OBBBO..OBPBO.........',
+  '...OBBBBOOBBPBO.........',
+  '...OBBBBBBBBPBBO........',
+  '..OBBBBBBBBBBBBO........',
+  '..OBBBBBBBBBBBBBO.......',
+  '.OBBBBBBBBBBBBBBO.......',
+  '.OBBBBBBBBBBBBBBO.......',
+  'OBBBBBBBBBBBBBBBO.......',
+  'OBBBBBBBBBBBBBBBO.......',
+  'OBBBBBBBBBBBBBBO........',
+  'OBBBBBBBBBBBBBBO........',
+  '.OBBBBBBBBBBBBBO........',
+  '.OBBBBBBBBBBBBO.........',
+  '..OBBBBBBBBBBBO.........',
+  '..OBBBBBBBBBBO..........',
+  '...OBBBBBBBBO...........',
+  '....OBBBBBBO............',
+  '.....OOOOOO.............',
+];
+
+/**
+ * Profile body: the far legs sit directly behind the near pair, so the torso
+ * reads as one mass on two feet rather than the front view's four.
+ */
+const BODY_SIDE: string[] = [
+  '...OOOOOOOOOOOO.........',
+  '...OBBBBBBBBBBO.........',
+  '..OBBBBBBBBBBBO.........',
+  '..OBBBBBBBBBBBO.........',
+  '..OBBBBBBBBBBBO.........',
+  '..OBBBBBBBBBBBO.........',
+  '...OBBBBBBBBBBO.........',
+  '...OBBBBBBBBBBO.........',
+  '...OBBBBBBBBBBO.........',
+  '...OBBBBBBBBBBO.........',
+  '...OOOOOOOOOOOO.........',
+  '........................',
+  '...OOOO...OOOO..........',
+  '...OBBO...OBBO..........',
+  '...OOOO...OOOO..........',
+];
+
+function padRows(rows: string[]): Grid {
+  return rows.map((row) => {
+    const cells = row.split('');
+    while (cells.length < SPRITE_WIDTH) cells.push('.');
+    return cells;
+  });
+}
+
+/**
+ * Three-quarter-back shares the profile silhouette rather than the front one.
+ * At 28px a turned-away head is much closer to a profile than to a flat back,
+ * and reusing it keeps back_side visibly distinct from back — which is wide
+ * and symmetric — instead of the two collapsing into the same picture.
+ */
+function isSided(facing: Facing): boolean {
+  return facing === 'side' || facing === 'back_side';
+}
+
+function blankGridFor(facing: Facing): Grid {
+  const sided = isSided(facing);
+  return padRows(
+    (sided ? HEAD_SIDE : HEAD).concat(['']).concat(sided ? BODY_SIDE : BODY)
+  );
+}
+
+/** Shifts cells sideways, for sliding the face round on a three-quarter view. */
+function shiftCells(cells: Cell[], dx: number): Cell[] {
+  return cells.map(([y, x, c]) => [y, x + dx, c] as Cell);
+}
+
+/** Keeps only the cat's left-hand features — the ones still visible in profile. */
+function nearSideCells(cells: Cell[]): Cell[] {
+  return cells.filter(([, x]) => x < ART_WIDTH / 2);
+}
+
+/** Ears seen from behind show fur, not the pink inner flap. */
+function hideInnerEars(g: Grid): void {
+  for (const row of g) {
+    for (let x = 0; x < row.length; x++) if (row[x] === 'P') row[x] = 'B';
+  }
+}
+
 /**
  * Builds the full pixel grid for one cat. Returns colour keys, not colours —
  * callers pair it with PALETTES[spec.palette] to resolve actual hex values.
+ *
+ * `facing` changes only geometry, so one authored angle serves the whole
+ * roster; adding a cat still costs a single entry in CAT_ROSTER.
  */
-export function buildCatGrid(spec: CatSpec): Grid {
-  const g = blankGrid();
+export function buildCatGrid(spec: CatSpec, facing: Facing = 'front'): Grid {
+  const g = blankGridFor(facing);
   const secondL: ColorKey = spec.whiteSecond ? 'W' : 'C';
   const secondR: ColorKey = 'W';
 
   applyPattern(g, spec.pattern, secondL, secondR);
-  stampTail(g, spec.tailUp ? TAIL_UP : TAIL_DOWN, spec.pattern, secondL);
-  stamp(g, EYES[spec.eye]);
-  stamp(g, NOSE);
+
+  // A tail sweeping off the hip is the silhouette's main read from behind, so
+  // it stays on every facing. The profile torso is narrower, so the tail moves
+  // in with it or it floats detached off the hip.
+  const baseTail = spec.tailUp ? TAIL_UP : TAIL_DOWN;
+  const tail = isSided(facing) ? { ...baseTail, tx: baseTail.tx - 4 } : baseTail;
+  stampTail(g, tail, spec.pattern, secondL);
+
+  if (facing === 'back' || facing === 'back_side') {
+    // Nothing of the face is visible from behind; ears show fur, not flap.
+    hideInnerEars(g);
+  } else if (facing === 'side') {
+    // One eye, and the nose out at the muzzle. Both eyes on a profile reads as
+    // a face pressed flat against glass.
+    stamp(g, shiftCells(nearSideCells(EYES[spec.eye]), 1));
+    stamp(g, shiftCells(NOSE, -8));
+  } else if (facing === 'front_side') {
+    stamp(g, shiftCells(EYES[spec.eye], -2));
+    stamp(g, shiftCells(NOSE, -2));
+  } else {
+    stamp(g, EYES[spec.eye]);
+    stamp(g, NOSE);
+  }
+
   if (spec.crown) stampFree(g, CROWN);
   if (spec.sparkles === 5) addSparkles(g, SPARKLE_5);
   if (spec.sparkles === 9) addSparkles(g, SPARKLE_9);
 
   return g;
+}
+
+/** Horizontal flip. Turns a left-facing angle into its right-facing twin. */
+export function mirrorGrid(g: Grid): Grid {
+  return g.map((row) => [...row].reverse());
+}
+
+/** Resolves a direction straight to pixels, mirroring where needed. */
+export function buildCatGridForDirection(spec: CatSpec, direction: Direction): Grid {
+  const { facing, flip } = DIRECTION_FACING[direction];
+  const grid = buildCatGrid(spec, facing);
+  return flip ? mirrorGrid(grid) : grid;
+}
+
+const gridCache = new Map<string, Grid>();
+
+/**
+ * Memoised `buildCatGridForDirection`. Grids are immutable once built, so a
+ * roster of 36 across 8 directions tops out at 288 cached entries — small
+ * enough to hold forever, and the reason a screenful of cats costs lookups
+ * rather than rebuilds. Renderers should still rasterise each grid to a
+ * bitmap once; this only removes the grid-construction cost.
+ */
+export function getCatGrid(spec: CatSpec, direction: Direction): Grid {
+  const key = `${spec.id}:${direction}`;
+  let grid = gridCache.get(key);
+  if (!grid) {
+    grid = buildCatGridForDirection(spec, direction);
+    gridCache.set(key, grid);
+  }
+  return grid;
 }
 
 /** Resolves a grid to hex colours, with null for transparent pixels. */
