@@ -54,7 +54,11 @@ export function createCat(
     targetX: queueSpot.x + lineOffsetX,
     targetY: queueSpot.y,
     speed: 3,
-    size: 52,
+    // Drawn at size * 1.8, so 26 puts a cat at ~47px on a 390px-wide floor —
+    // roughly three quarters of a 60px table. At 52 a cat came out 94px wide,
+    // half again wider than the table it was sitting at, and ten of them
+    // buried the café.
+    size: 26,
     state: 'walkingToLine',
     seatIndex: null,
     lineOffsetX,

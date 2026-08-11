@@ -10,9 +10,9 @@ import {
   Alert,
   Vibration,
 } from 'react-native';
-import { useCafeState } from '../../../hooks/useCafeState';
-import { SHOP_ITEMS } from '../../../constants/cafeData';
-import { colors } from '../../../constants/colors';
+import { useCafeState } from '../../hooks/useCafeState';
+import { SHOP_ITEMS } from '../../constants/cafeData';
+import { colors } from '../../constants/colors';
 
 const VISUAL_UPGRADES: Record<
   string,
