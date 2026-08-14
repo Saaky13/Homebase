@@ -1,11 +1,10 @@
-import React, { useEffect, useMemo, useRef } from 'react';
+import React, { useMemo } from 'react';
 import {
   Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 
-import { createCanvasPainter } from '../town/canvasPainter';
-import { drawTown } from '../town/draw';
+import TownSurface from './TownSurface';
 import {
   BUILDINGS, buildTownGrid, FOUNTAIN, MAP_PX_H, MAP_PX_W, TILE,
 } from '../town/map';
@@ -22,7 +21,6 @@ const FOUNTAIN_HIT = {
 };
 
 export default function TownMap({ night }: { night?: boolean }) {
-  const canvasRef = useRef<any>(null);
   const router = useRouter();
   const { width } = useWindowDimensions();
 
@@ -33,30 +31,10 @@ export default function TownMap({ night }: { night?: boolean }) {
   // The map is 384px wide; narrower phones scale it down rather than clip.
   const scale = Math.min(1, width / MAP_PX_W);
 
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || typeof canvas.getContext !== 'function') return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    // Backing store stays at art resolution; CSS does the scaling so the
-    // pixels stay square.
-    canvas.width = MAP_PX_W;
-    canvas.height = MAP_PX_H;
-    ctx.imageSmoothingEnabled = false;
-
-    const palette = isNight ? nightPalette() : DAY_PALETTE;
-    const roofs = isNight ? nightRoofs() : DAY_ROOFS;
-    ctx.clearRect(0, 0, MAP_PX_W, MAP_PX_H);
-    drawTown(createCanvasPainter(ctx), palette, roofs, grid, { night: isNight });
-  }, [grid, isNight]);
-
-  const canvasStyle = {
-    width: MAP_PX_W * scale,
-    height: MAP_PX_H * scale,
-    display: 'block',
-    imageRendering: 'pixelated',
-  };
+  // Recomputing these on every render would defeat the surface's memoised
+  // picture on native, since they are dependencies of it.
+  const palette = useMemo(() => (isNight ? nightPalette() : DAY_PALETTE), [isNight]);
+  const roofs = useMemo(() => (isNight ? nightRoofs() : DAY_ROOFS), [isNight]);
 
   const labelBox = isNight ? styles.labelNight : styles.labelDay;
   const labelText = isNight ? styles.labelTextNight : styles.labelTextDay;
@@ -82,9 +60,15 @@ export default function TownMap({ night }: { night?: boolean }) {
       ]}
     >
       <View style={{ width: MAP_PX_W * scale, height: MAP_PX_H * scale }}>
-        {/* Web path. Native draws the same thing through a Skia painter —
-            see town/canvasPainter.ts for the seam. */}
-        <canvas ref={canvasRef} style={canvasStyle as any} />
+        {/* Web paints into a <canvas>; iOS and Android paint the identical
+            artwork through Skia. Metro picks the platform variant. */}
+        <TownSurface
+          grid={grid}
+          palette={palette}
+          roofs={roofs}
+          isNight={isNight}
+          scale={scale}
+        />
 
         {/* Transparent hit targets rather than canvas hit-testing: the specs
             already carry footprints, so press states and accessibility
