@@ -4,14 +4,14 @@ import {
   StyleSheet,
 } from 'react-native';
 import { colors } from '../../constants/colors';
-import CafeCanvas from '../../components/CafeCanvas';
+import CafeCanvasHost from '../../components/CafeCanvasHost';
 import PopularityMeter from '../../components/PopularityMeter';
 
 export default function CafeTab() {
   return (
     <SafeAreaView style={styles.container}>
       <PopularityMeter />
-      <CafeCanvas />
+      <CafeCanvasHost />
     </SafeAreaView>
   );
 }

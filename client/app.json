@@ -1,17 +1,19 @@
 {
   "expo": {
-    "name": "client",
-    "slug": "client",
+    "name": "Homebase",
+    "slug": "homebase",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "client",
+    "scheme": "homebase",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.saaky13.homebase"
     },
     "android": {
+      "package": "com.saaky13.homebase",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -21,13 +23,11 @@
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false
     },
-      "web": {
-        "output": "static",
-        "favicon": "./assets/images/favicon.png",
-        "bundler": "metro"
-      }
-    ,
-  
+    "web": {
+      "output": "static",
+      "favicon": "./assets/images/favicon.png",
+      "bundler": "metro"
+    },
     "plugins": [
       "expo-router",
       [

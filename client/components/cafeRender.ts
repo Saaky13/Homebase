@@ -1,4 +1,5 @@
 import { getTableCenters } from './cafeConfig';
+import type { Ctx2D } from './skiaCanvas2d';
 
 export function getSeatSpots() {
   return getTableCenters().flatMap((table) => [
@@ -17,7 +18,7 @@ export function getQueueSpots(width: number) {
 }
 
 export function drawCafeBackground(
-  ctx: CanvasRenderingContext2D,
+  ctx: Ctx2D,
   width: number,
   height: number,
   counterStyle: number,
@@ -68,7 +69,7 @@ export function drawCafeBackground(
 }
 
 export function drawSeatingAreas(
-  ctx: CanvasRenderingContext2D,
+  ctx: Ctx2D,
   tableStyle: number
 ) {
   getTableCenters().forEach((table) => {
@@ -81,7 +82,7 @@ export function drawSeatingAreas(
 }
 
 function drawTableOption1(
-  ctx: CanvasRenderingContext2D,
+  ctx: Ctx2D,
   x: number,
   y: number
 ) {
@@ -124,7 +125,7 @@ function drawTableOption1(
 }
 
 function drawTableOption2(
-  ctx: CanvasRenderingContext2D,
+  ctx: Ctx2D,
   x: number,
   y: number
 ) {
@@ -204,7 +205,7 @@ function drawTableOption2(
   ctx.fill();
 }
 
-function drawCounterOption1(ctx: CanvasRenderingContext2D, width: number) {
+function drawCounterOption1(ctx: Ctx2D, width: number) {
   const counterFront = '#CF9A63';
   const counterMid = '#D9A672';
   const counterTop = '#B57E43';
@@ -224,7 +225,7 @@ function drawCounterOption1(ctx: CanvasRenderingContext2D, width: number) {
   ctx.fill();
 }
 
-function drawCounterOption2(ctx: CanvasRenderingContext2D, width: number) {
+function drawCounterOption2(ctx: Ctx2D, width: number) {
   const counterFront = '#E39D6B';
   const counterMid = '#EDBC85';
   const counterTop = '#C77F48';
@@ -245,7 +246,7 @@ function drawCounterOption2(ctx: CanvasRenderingContext2D, width: number) {
 }
 
 function drawWalkwayRugOption1(
-  ctx: CanvasRenderingContext2D,
+  ctx: Ctx2D,
   width: number,
   y: number,
   height: number
@@ -265,7 +266,7 @@ function drawWalkwayRugOption1(
 }
 
 function drawWalkwayRugOption2(
-  ctx: CanvasRenderingContext2D,
+  ctx: Ctx2D,
   width: number,
   y: number,
   height: number
@@ -295,7 +296,7 @@ function drawWalkwayRugOption2(
 }
 
 function drawFloorTiles(
-  ctx: CanvasRenderingContext2D,
+  ctx: Ctx2D,
   x: number,
   y: number,
   width: number,
@@ -348,7 +349,7 @@ function drawFloorTiles(
 }
 
 function drawCounterShape(
-  ctx: CanvasRenderingContext2D,
+  ctx: Ctx2D,
   centerX: number,
   topY: number,
   width: number,
