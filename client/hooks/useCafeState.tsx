@@ -154,6 +154,8 @@ export interface CafeState {
   // knows to stay out of the way
   focusSessionActive: boolean;
   focusTimer: FocusTimer;
+  /** Achievement ids the user has claimed their pearl reward for. */
+  claimedAchievements: string[];
 }
 
 const STORAGE_KEY = '@focus_cafe_state_v2';
@@ -230,6 +232,7 @@ const initialState: CafeState = {
   },
   focusSessionActive: false,
   focusTimer: idleFocusTimer(),
+  claimedAchievements: [],
 };
 
 /**
@@ -431,6 +434,7 @@ type CafeContextType = {
   snoozeGuideMessages: (minutes: number) => void;
   muteGuideMessage: (id: string) => void;
   setFocusSessionActive: (active: boolean) => void;
+  claimAchievement: (achievementId: string, pearlReward: number) => boolean;
 };
 
 const CafeContext = createContext<CafeContextType | null>(null);
@@ -1298,6 +1302,23 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
     [commit]
   );
 
+  const claimAchievement = useCallback(
+    (achievementId: string, pearlReward: number): boolean => {
+      let claimed = false;
+      commit((prev) => {
+        if (prev.claimedAchievements.includes(achievementId)) return prev;
+        claimed = true;
+        return {
+          ...prev,
+          claimedAchievements: [...prev.claimedAchievements, achievementId],
+          pearls: prev.pearls + pearlReward,
+        };
+      });
+      return claimed;
+    },
+    [commit]
+  );
+
   return (
     <CafeContext.Provider
       value={{
@@ -1343,6 +1364,7 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
         snoozeGuideMessages,
         muteGuideMessage,
         setFocusSessionActive,
+        claimAchievement,
       }}
     >
       {children}

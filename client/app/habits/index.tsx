@@ -22,6 +22,12 @@ import {
   pearlsForRep,
   TIER_ORDER,
 } from '../../constants/habitTiers';
+import ACHIEVEMENTS, {
+  ACHIEVEMENT_CATEGORIES,
+  AchievementCategory,
+  AchievementCheckState,
+  CATEGORY_BY_ID,
+} from '../../constants/achievements';
 
 type HubSection =
   | 'hub'
@@ -31,7 +37,8 @@ type HubSection =
   | 'focus'
   | 'calendar'
   | 'resources'
-  | 'todo';
+  | 'todo'
+  | 'achievements';
 
 interface CalendarDay {
   date: number;
@@ -111,6 +118,7 @@ export default function HabitsTab() {
     addTodo,
     toggleTodo,
     removeTodo,
+    claimAchievement,
   } = useCafeState();
 
   const [section, setSection] = useState<HubSection>('hub');
@@ -307,6 +315,13 @@ export default function HabitsTab() {
           emoji="⏱"
           colorStyle={styles.tileMint}
           onPress={() => setSection('focus')}
+        />
+        <ThreeDButton
+          title="Achievements"
+          subtitle="Milestones"
+          emoji="🏆"
+          colorStyle={styles.tileGold}
+          onPress={() => setSection('achievements')}
         />
         <ThreeDButton
           title="Resources"
@@ -733,6 +748,270 @@ export default function HabitsTab() {
     </View>
   );
 
+  const achievementCheckState = useMemo((): AchievementCheckState => {
+    const stats = state.dailyStats;
+    let totalDrinksServed = 0;
+    let totalCoinsEarned = 0;
+    let totalPearlsEarned = 0;
+    let totalReflections = 0;
+    let totalMissionCheckIns = 0;
+
+    Object.values(stats).forEach((day) => {
+      totalDrinksServed += day.drinksServed ?? 0;
+      totalCoinsEarned += day.coinsEarned ?? 0;
+      totalPearlsEarned += day.pearlsEarned ?? 0;
+      if (day.missionCheckedIn) totalMissionCheckIns++;
+    });
+
+    // Count reflections from dailyStats; fallback: at least 1 if reflectionLastClaimedDate is set
+    if (state.reflectionLastClaimedDate && totalReflections === 0) totalReflections = 1;
+
+    let longestStreak = 0;
+    let habitsWithStreak3 = 0;
+    let habitsWithStreak7 = 0;
+    let habitsWithStreak14 = 0;
+    let habitsWithStreak30 = 0;
+
+    state.habits.forEach((habit) => {
+      const streak = getHabitStreak(habit.id);
+      if (streak > longestStreak) longestStreak = streak;
+      if (streak >= 3) habitsWithStreak3++;
+      if (streak >= 7) habitsWithStreak7++;
+      if (streak >= 14) habitsWithStreak14++;
+      if (streak >= 30) habitsWithStreak30++;
+    });
+
+    return {
+      totalHabits: state.habits.length,
+      totalFocusMinutes: state.totalFocusMinutes,
+      totalDrinksServed,
+      totalCoinsEarned,
+      coins: state.coins,
+      pearls: state.pearls,
+      level: state.level,
+      popularity: state.popularity,
+      unlockedItems: state.unlockedItems,
+      longestStreak,
+      habitsWithStreak3,
+      habitsWithStreak7,
+      habitsWithStreak14,
+      habitsWithStreak30,
+      totalPearlsEarned,
+      missionSet: !!state.mission.trim(),
+      totalReflections,
+      totalMissionCheckIns,
+      shopItemsOwned: state.unlockedItems.length,
+    };
+  }, [state, getHabitStreak]);
+
+  const [achFilter, setAchFilter] = useState<AchievementCategory | 'all'>('all');
+
+  // Every achievement resolved once, then grouped the way habits group by
+  // tier — a section header per category with its own earned count.
+  const achievementState = useMemo(() => {
+    const resolved = ACHIEVEMENTS.map((ach) => ({
+      ...ach,
+      earned: ach.check(achievementCheckState),
+      claimed: state.claimedAchievements.includes(ach.id),
+    }));
+
+    const totalEarned = resolved.filter((a) => a.earned).length;
+    const readyToClaim = resolved.filter((a) => a.earned && !a.claimed).length;
+
+    const groups = ACHIEVEMENT_CATEGORIES.map((cat) => {
+      const items = resolved.filter((a) => a.category === cat.id);
+      return {
+        cat,
+        items,
+        earned: items.filter((a) => a.earned).length,
+      };
+    })
+      .filter((g) => g.items.length > 0)
+      .filter((g) => achFilter === 'all' || g.cat.id === achFilter);
+
+    return { groups, totalEarned, readyToClaim, total: resolved.length };
+  }, [achievementCheckState, state.claimedAchievements, achFilter]);
+
+  const handleClaimAchievement = (id: string, pearls: number) => {
+    if (claimAchievement(id, pearls)) {
+      Alert.alert('Achievement claimed', `+${pearls} pearls`);
+    }
+  };
+
+  const renderAchievementRow = (
+    ach: (typeof achievementState.groups)[number]['items'][number]
+  ) => {
+    const theme = CATEGORY_BY_ID[ach.category];
+    const claimable = ach.earned && !ach.claimed;
+
+    return (
+      <Pressable
+        key={ach.id}
+        onPress={
+          claimable
+            ? () => handleClaimAchievement(ach.id, ach.pearlReward)
+            : undefined
+        }
+        disabled={!claimable}
+        style={({ pressed }) => [
+          styles.achCard,
+          ach.earned
+            ? {
+                backgroundColor: theme.tint,
+                borderColor: theme.edge,
+                shadowColor: theme.edge,
+              }
+            : styles.achCardLocked,
+          ach.earned && styles.achCardEarned,
+          ach.claimed && styles.achCardClaimed,
+          pressed && claimable && styles.smallPressed,
+        ]}
+      >
+        <View
+          style={[
+            styles.achIconWrap,
+            ach.earned && { backgroundColor: 'rgba(255,255,255,0.72)', borderColor: theme.edge },
+          ]}
+        >
+          {/* A ghosted version of the real icon reads better than a padlock —
+              it shows what you're working toward instead of hiding it. */}
+          <Text style={[styles.achEmoji, !ach.earned && styles.achEmojiLocked]}>
+            {ach.emoji}
+          </Text>
+        </View>
+
+        <View style={styles.achInfo}>
+          <Text
+            style={[styles.achTitle, ach.earned && { color: theme.ink }]}
+            numberOfLines={1}
+          >
+            {ach.title}
+          </Text>
+          <Text
+            style={[styles.achDesc, ach.earned && { color: theme.ink, opacity: 0.72 }]}
+            numberOfLines={2}
+          >
+            {ach.description}
+          </Text>
+        </View>
+
+        {claimable ? (
+          <View style={styles.achClaimPill}>
+            <Text style={styles.achClaimPillText}>+{ach.pearlReward}</Text>
+          </View>
+        ) : ach.claimed ? (
+          <View style={styles.achDoneWrap}>
+            <Text style={styles.achDoneCheck}>✓</Text>
+            <Text style={[styles.achDoneLabel, { color: theme.ink }]}>
+              +{ach.pearlReward}
+            </Text>
+          </View>
+        ) : (
+          <Text style={styles.achRewardPreview}>+{ach.pearlReward}</Text>
+        )}
+      </Pressable>
+    );
+  };
+
+  const renderAchievements = () => (
+    <>
+      <View style={styles.achHero}>
+        <Text style={styles.achHeroEyebrow}>Milestones</Text>
+
+        <View style={styles.achHeroRow}>
+          <Text style={styles.achHeroTitle}>Achievements</Text>
+          <Text style={styles.achHeroCount}>
+            {achievementState.totalEarned}
+            <Text style={styles.achHeroCountTotal}>/{achievementState.total}</Text>
+          </Text>
+        </View>
+
+        <View style={styles.achProgressTrack}>
+          <View
+            style={[
+              styles.achProgressFill,
+              {
+                width: `${Math.round(
+                  (achievementState.totalEarned / achievementState.total) * 100
+                )}%`,
+              },
+            ]}
+          />
+        </View>
+
+        <Text style={styles.achHeroFoot}>
+          {achievementState.readyToClaim > 0
+            ? `${achievementState.readyToClaim} ready to claim — tap to collect.`
+            : 'Earned badges pay out pearls. Keep showing up.'}
+        </Text>
+      </View>
+
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={styles.achFilterScroll}
+        contentContainerStyle={styles.achFilterRow}
+      >
+        <Pressable
+          onPress={() => setAchFilter('all')}
+          style={({ pressed }) => [
+            styles.achFilterChip,
+            achFilter === 'all' && styles.achFilterChipActive,
+            pressed && styles.smallPressed,
+          ]}
+        >
+          <Text
+            style={[
+              styles.achFilterText,
+              achFilter === 'all' && styles.achFilterTextActive,
+            ]}
+          >
+            All
+          </Text>
+        </Pressable>
+
+        {ACHIEVEMENT_CATEGORIES.map((cat) => (
+          <Pressable
+            key={cat.id}
+            onPress={() => setAchFilter(cat.id)}
+            style={({ pressed }) => [
+              styles.achFilterChip,
+              achFilter === cat.id && {
+                backgroundColor: cat.tint,
+                borderColor: cat.edge,
+                shadowColor: cat.edge,
+              },
+              achFilter === cat.id && styles.achFilterChipActive,
+              pressed && styles.smallPressed,
+            ]}
+          >
+            <Text
+              style={[
+                styles.achFilterText,
+                achFilter === cat.id && { color: cat.ink },
+              ]}
+            >
+              {cat.emoji}  {cat.label}
+            </Text>
+          </Pressable>
+        ))}
+      </ScrollView>
+
+      {achievementState.groups.map((group) => (
+        <View key={group.cat.id} style={styles.achSection}>
+          <View style={styles.achSectionHeader}>
+            <Text style={styles.achSectionLabel}>{group.cat.label}</Text>
+            <Text style={styles.achSectionCount}>
+              {group.earned} of {group.items.length}
+            </Text>
+          </View>
+
+          {group.items.map(renderAchievementRow)}
+        </View>
+      ))}
+    </>
+  );
+
   const renderResources = () => (
     <View style={styles.sectionCard}>
       <Text style={styles.sectionHeader}>Resources</Text>
@@ -776,6 +1055,7 @@ export default function HabitsTab() {
         {section === 'focus' && <FocusSection />}
         {section === 'calendar' && renderCalendar()}
         {section === 'todo' && renderTodo()}
+        {section === 'achievements' && renderAchievements()}
         {section === 'resources' && renderResources()}
 
         <View style={{ height: 30 }} />
@@ -1612,6 +1892,233 @@ const styles = StyleSheet.create({
   resourceBody: {
     fontSize: 12,
     color: '#80919D',
+  },
+
+  // A deeper amber than tileButter so Achievements doesn't read as a
+  // duplicate of the Reflection tile sitting two rows above it.
+  tileGold: {
+    backgroundColor: '#FFE7A3',
+    borderColor: '#E3C26B',
+    shadowColor: '#D6B052',
+  },
+
+  achHero: {
+    backgroundColor: '#FFFCF2',
+    borderRadius: 28,
+    padding: 20,
+    borderWidth: 1,
+    borderColor: '#F0E0BB',
+    marginBottom: 14,
+  },
+  achHeroEyebrow: {
+    fontSize: 11,
+    color: '#B79A5E',
+    textTransform: 'uppercase',
+    letterSpacing: 0.7,
+    marginBottom: 6,
+    fontWeight: '700',
+  },
+  achHeroRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    justifyContent: 'space-between',
+    marginBottom: 14,
+  },
+  achHeroTitle: {
+    fontSize: 26,
+    fontWeight: '800',
+    color: '#5B4A63',
+  },
+  achHeroCount: {
+    fontSize: 22,
+    fontWeight: '900',
+    color: '#A98A3F',
+  },
+  achHeroCountTotal: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#C4AC7A',
+  },
+  achProgressTrack: {
+    height: 10,
+    backgroundColor: '#F4E8CC',
+    borderRadius: 999,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#EADCBB',
+  },
+  achProgressFill: {
+    height: '100%',
+    backgroundColor: '#E7B85C',
+    borderRadius: 999,
+  },
+  achHeroFoot: {
+    fontSize: 12,
+    color: '#9A855F',
+    fontWeight: '700',
+    marginTop: 10,
+  },
+
+  achFilterScroll: {
+    marginBottom: 16,
+    flexGrow: 0,
+    overflow: 'visible',
+  },
+  achFilterRow: {
+    gap: 8,
+    paddingVertical: 4,
+    paddingRight: 4,
+  },
+  achFilterChip: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 999,
+    paddingHorizontal: 15,
+    paddingVertical: 9,
+    borderWidth: 1,
+    borderColor: '#ECD8E6',
+    shadowColor: '#DCC5D6',
+    shadowOpacity: 0.3,
+    shadowRadius: 0,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 3,
+  },
+  achFilterChipActive: {
+    shadowOpacity: 0.4,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 4,
+  },
+  achFilterText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#8B7682',
+  },
+  achFilterTextActive: {
+    color: '#7A6230',
+  },
+
+  achSection: { marginBottom: 18 },
+  achSectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+    paddingHorizontal: 4,
+  },
+  achSectionLabel: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#B58CAD',
+    textTransform: 'uppercase',
+    letterSpacing: 0.7,
+  },
+  achSectionCount: {
+    fontSize: 11,
+    color: '#B58CAD',
+    fontWeight: '700',
+  },
+
+  achCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 18,
+    borderWidth: 1.5,
+    borderColor: '#F1E4EC',
+    paddingHorizontal: 13,
+    paddingVertical: 12,
+    marginBottom: 8,
+    minHeight: 68,
+  },
+  achCardEarned: {
+    shadowOpacity: 0.35,
+    shadowRadius: 0,
+    shadowOffset: { width: 0, height: 5 },
+    elevation: 5,
+  },
+  achCardLocked: {
+    backgroundColor: '#FDFAFC',
+    borderColor: '#F1E4EC',
+  },
+  // Claimed badges stay coloured but step back, the way a finished habit
+  // tile fades rather than disappearing.
+  achCardClaimed: {
+    opacity: 0.72,
+    shadowOpacity: 0.2,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 3,
+  },
+  achIconWrap: {
+    width: 42,
+    height: 42,
+    borderRadius: 14,
+    backgroundColor: '#F8F3F6',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#EFE2EB',
+  },
+  achEmoji: {
+    fontSize: 20,
+  },
+  achEmojiLocked: {
+    opacity: 0.28,
+  },
+  achInfo: {
+    flex: 1,
+  },
+  achTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#A2939C',
+    marginBottom: 3,
+  },
+  achDesc: {
+    fontSize: 12,
+    lineHeight: 16,
+    color: '#AC9EA7',
+  },
+  // Pearls are the payout, so the claim pill wears the pearl purple rather
+  // than the gold used for coins.
+  achClaimPill: {
+    backgroundColor: '#C8B6F2',
+    borderRadius: 999,
+    paddingHorizontal: 13,
+    paddingVertical: 7,
+    borderWidth: 1,
+    borderColor: '#8B73CC',
+    shadowColor: '#8B73CC',
+    shadowOpacity: 0.4,
+    shadowRadius: 0,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 4,
+  },
+  achClaimPillText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#FFFFFF',
+  },
+  achDoneWrap: {
+    alignItems: 'center',
+    minWidth: 34,
+  },
+  achDoneCheck: {
+    fontSize: 17,
+    fontWeight: '900',
+    color: '#63B97C',
+  },
+  achDoneLabel: {
+    fontSize: 10,
+    fontWeight: '800',
+    opacity: 0.7,
+    marginTop: 1,
+  },
+  achRewardPreview: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#CFC0C9',
+    minWidth: 34,
+    textAlign: 'center',
   },
 
   smallPressed: {
