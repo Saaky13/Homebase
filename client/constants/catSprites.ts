@@ -698,6 +698,154 @@ export function buildCatGridForDirection(spec: CatSpec, direction: Direction): G
   return flip ? mirrorGrid(grid) : grid;
 }
 
+/* ------------------------------------------------------------------ */
+/* Mini sprites — town map                                             */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Cats on the town map, at half the resolution of the full sprite.
+ *
+ * These are DERIVED from the real art rather than hand-drawn. An earlier pass
+ * authored separate 12x15 grids by hand, and they looked crude next to the
+ * roster icons for a concrete reason: redrawing at that size meant giving up
+ * ears, tail, coat pattern and per-cat markings, so every cat became the same
+ * outlined blob in a different colour. Halving the real grid keeps all of it,
+ * and a cat on the map is recognisably the cat you collected.
+ *
+ * Naive averaging is what makes downscaled pixel art turn to mush, so this
+ * does not average. It picks a winner per 2x2 block by salience, then redraws
+ * the outline from the resulting silhouette. See `halveGrid`.
+ */
+export type MiniDirection = 'front' | 'back' | 'left' | 'right';
+
+const MINI_TO_DIRECTION: Record<MiniDirection, Direction> = {
+  front: 'front',
+  back: 'back',
+  left: 'left',
+  right: 'right',
+};
+
+/**
+ * Which colour survives when four pixels collapse into one.
+ *
+ * Eyes rank highest because at this size they are the whole face — lose them
+ * and the sprite stops reading as an animal. Outline ranks lowest: it wins
+ * only where there is nothing else, since keeping it by majority would thicken
+ * every edge inward and eat the body. The silhouette pass below puts a clean
+ * one-pixel outline back afterwards.
+ */
+const MINI_SALIENCE: Record<string, number> = {
+  E: 6, // eyes
+  P: 5, // inner ear / nose pink
+  K: 4, // accents
+  W: 3, // white markings
+  C: 3, // secondary coat
+  H: 3, // highlight
+  S: 2, // shade
+  B: 1, // base fur
+  O: 0, // outline
+};
+
+/**
+ * Halves a grid, preserving the silhouette.
+ *
+ * Two passes. First each 2x2 block collapses to its most salient non-empty
+ * pixel, which keeps eyes and markings alive where a mode or an average would
+ * drop them. Then every surviving pixel touching transparency becomes outline,
+ * which restores the hard edge that gives pixel art its read — eroded in the
+ * first pass precisely so it could not bleed inward.
+ */
+export function halveGrid(g: Grid): Grid {
+  const h = Math.ceil(g.length / 2);
+  const w = Math.ceil((g[0]?.length ?? 0) / 2);
+  const out: Grid = [];
+
+  for (let y = 0; y < h; y++) {
+    const row: string[] = [];
+    for (let x = 0; x < w; x++) {
+      let best = '.';
+      let bestScore = -1;
+      for (let dy = 0; dy < 2; dy++) {
+        for (let dx = 0; dx < 2; dx++) {
+          const ch = g[y * 2 + dy]?.[x * 2 + dx];
+          if (!ch || ch === '.') continue;
+          const score = MINI_SALIENCE[ch] ?? 1;
+          if (score > bestScore) {
+            bestScore = score;
+            best = ch;
+          }
+        }
+      }
+      row.push(best);
+    }
+    out.push(row);
+  }
+
+  const opaque = out.map((row) => row.map((ch) => ch !== '.'));
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (!opaque[y][x]) continue;
+      const edge =
+        !opaque[y - 1]?.[x] ||
+        !opaque[y + 1]?.[x] ||
+        !opaque[y][x - 1] ||
+        !opaque[y][x + 1];
+      // Eyes on the edge would be swallowed by the outline; a one-pixel eye is
+      // worth more to the read than an unbroken border.
+      if (edge && out[y][x] !== 'E') out[y][x] = 'O';
+    }
+  }
+
+  return out;
+}
+
+/**
+ * Drops fully transparent rows and columns.
+ *
+ * The full sprite is padded to a fixed 28-wide canvas so angles can share
+ * coordinates. Carrying that padding onto the map would mean the drawing code
+ * aligning feet against blank space, so the mini is trimmed to its own ink and
+ * positioned by its real bounds.
+ */
+function trimGrid(g: Grid): Grid {
+  let top = 0;
+  let bottom = g.length - 1;
+  const solid = (row: string[]) => row.some((ch) => ch && ch !== '.');
+  while (top < bottom && !solid(g[top])) top++;
+  while (bottom > top && !solid(g[bottom])) bottom--;
+
+  const rows = g.slice(top, bottom + 1);
+  const width = rows[0]?.length ?? 0;
+  let left = 0;
+  let right = width - 1;
+  const colSolid = (x: number) => rows.some((r) => r[x] && r[x] !== '.');
+  while (left < right && !colSolid(left)) left++;
+  while (right > left && !colSolid(right)) right--;
+
+  return rows.map((r) => r.slice(left, right + 1));
+}
+
+export function buildMiniCatGrid(spec: CatSpec, direction: MiniDirection): Grid {
+  return trimGrid(halveGrid(buildCatGridForDirection(spec, MINI_TO_DIRECTION[direction])));
+}
+
+const miniCache = new Map<string, Grid>();
+
+/**
+ * Memoised `buildMiniCatGrid`. Four directions across a 36-cat roster caps
+ * this at 144 entries, which is worth holding forever to keep a screenful of
+ * roaming cats down to map lookups.
+ */
+export function getMiniCatGrid(spec: CatSpec, direction: MiniDirection): Grid {
+  const key = `${spec.id}:${direction}`;
+  let grid = miniCache.get(key);
+  if (!grid) {
+    grid = buildMiniCatGrid(spec, direction);
+    miniCache.set(key, grid);
+  }
+  return grid;
+}
+
 const gridCache = new Map<string, Grid>();
 
 /**

@@ -5,13 +5,32 @@ import {
 import { useRouter } from 'expo-router';
 
 import { createCanvasPainter } from '../town/canvasPainter';
-import { drawTown } from '../town/draw';
+import { drawRoamers, drawTown } from '../town/draw';
 import {
-  BUILDINGS, buildTownGrid, FOUNTAIN, MAP_PX_H, MAP_PX_W, TILE,
+  BUILDINGS, buildTownGrid, FOUNTAIN, MAP_PX_H, MAP_PX_W, STARTER_TOWN_CATS, TILE,
 } from '../town/map';
 import {
   DAY_PALETTE, DAY_ROOFS, isNightAt, nightPalette, nightRoofs,
 } from '../town/palette';
+import { createRoamers, stepRoamers } from '../town/roam';
+import { CAT_ROSTER } from '../constants/catSprites';
+import { useCafeState } from '../hooks/useCafeState';
+
+/** Keeps the town lively without turning the paths into a parade. */
+const MAX_ROAMERS = 16;
+
+/**
+ * Who is out walking. The starter cats are always around; every cat unlocked
+ * in the shop adds another to the street, which is the whole point — progress
+ * should be visible on the map rather than only in a menu.
+ */
+function roamingCatIds(unlockedItems: string[]): string[] {
+  const unlockedCats = unlockedItems.filter((id) => id.startsWith('cat-')).length;
+  const extras = CAT_ROSTER.map((c) => c.id).filter(
+    (id) => !STARTER_TOWN_CATS.includes(id)
+  );
+  return [...STARTER_TOWN_CATS, ...extras.slice(0, unlockedCats)].slice(0, MAX_ROAMERS);
+}
 
 /** Tap target around the fountain — the Growth Hub entrance. */
 const FOUNTAIN_HIT = {
@@ -26,9 +45,16 @@ export default function TownMap({ night }: { night?: boolean }) {
   const router = useRouter();
   const { width } = useWindowDimensions();
 
+  const { state } = useCafeState();
+
   const isNight = night ?? isNightAt();
   // The grid comes from stable noise, so it only needs building once.
   const grid = useMemo(() => buildTownGrid(), []);
+
+  // Joined into a string so the animation effect restarts only when the cast
+  // actually changes, not on every state write.
+  const catKey = roamingCatIds(state.unlockedItems).join(',');
+  const catIds = useMemo(() => catKey.split(','), [catKey]);
 
   // The map is 384px wide; narrower phones scale it down rather than clip.
   const scale = Math.min(1, width / MAP_PX_W);
@@ -47,9 +73,51 @@ export default function TownMap({ night }: { night?: boolean }) {
 
     const palette = isNight ? nightPalette() : DAY_PALETTE;
     const roofs = isNight ? nightRoofs() : DAY_ROOFS;
-    ctx.clearRect(0, 0, MAP_PX_W, MAP_PX_H);
-    drawTown(createCanvasPainter(ctx), palette, roofs, grid, { night: isNight });
-  }, [grid, isNight]);
+
+    // The town is thousands of one-pixel rects and never changes. Painting it
+    // once into an offscreen layer and blitting that each frame is the
+    // difference between redrawing a whole tilemap 60 times a second and
+    // copying one image.
+    const base =
+      typeof document !== 'undefined' ? document.createElement('canvas') : null;
+    let baseCtx: CanvasRenderingContext2D | null = null;
+    if (base) {
+      base.width = MAP_PX_W;
+      base.height = MAP_PX_H;
+      baseCtx = base.getContext('2d');
+    }
+
+    if (baseCtx) {
+      baseCtx.imageSmoothingEnabled = false;
+      drawTown(createCanvasPainter(baseCtx), palette, roofs, grid, { night: isNight });
+    } else {
+      // No offscreen canvas available — fall back to a single static paint so
+      // the town still renders, just without wandering cats.
+      ctx.clearRect(0, 0, MAP_PX_W, MAP_PX_H);
+      drawTown(createCanvasPainter(ctx), palette, roofs, grid, { night: isNight });
+      return;
+    }
+
+    const painter = createCanvasPainter(ctx);
+    const roamers = createRoamers(grid, catIds, performance.now());
+
+    let raf = 0;
+    let last = performance.now();
+
+    const frame = (now: number) => {
+      stepRoamers(roamers, grid, now - last, now);
+      last = now;
+
+      ctx.clearRect(0, 0, MAP_PX_W, MAP_PX_H);
+      ctx.drawImage(base as HTMLCanvasElement, 0, 0);
+      drawRoamers(painter, roamers, isNight);
+
+      raf = requestAnimationFrame(frame);
+    };
+
+    raf = requestAnimationFrame(frame);
+    return () => cancelAnimationFrame(raf);
+  }, [grid, isNight, catIds]);
 
   const canvasStyle = {
     width: MAP_PX_W * scale,

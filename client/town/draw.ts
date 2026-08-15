@@ -9,10 +9,11 @@
 
 import {
   BUILDINGS, BuildingSpec, DoorKind, EMPTY_PLOTS, FOUNTAIN, GREENHOUSE,
-  KEY_TREE, MAP_H, MAP_W, RoofStyle, TILE, Tile, TOWN_CATS, TreeKind, WindowKind, noise,
+  KEY_TREE, MAP_H, MAP_W, RoofStyle, TILE, Tile, TreeKind, WindowKind, noise,
 } from './map';
 import { dimForNight, RoofColor, RoofKey, TownPalette } from './palette';
-import { Direction, getCat, getCatGrid, PALETTES } from '../constants/catSprites';
+import { getCat, getMiniCatGrid, PALETTES } from '../constants/catSprites';
+import { Roamer } from './roam';
 
 /** The only drawing operation the town needs. */
 export interface Painter {
@@ -400,26 +401,43 @@ function drawPlotSigns(c: Ctx): void {
 }
 
 /**
- * Cats loitering in town. `getCatGrid` is memoised upstream, so redrawing the
- * map does not rebuild sprites.
+ * Cats wandering the town, drawn from the 9x11 mini sprites.
+ *
+ * Kept separate from `drawTown` because it is the only thing that changes
+ * between frames: the town is painted once into an offscreen layer and blitted,
+ * and only this runs per frame.
  */
-function drawCats(c: Ctx, night: boolean): void {
-  TOWN_CATS.forEach((entry) => {
-    const spec = getCat(entry.catId);
-    if (!spec) return;
-    const grid = getCatGrid(spec, entry.dir as Direction);
+export function drawRoamers(
+  painter: Painter,
+  roamers: Roamer[],
+  night: boolean
+): void {
+  for (const r of roamers) {
+    const spec = getCat(r.catId);
+    if (!spec) continue;
+
+    const grid = getMiniCatGrid(spec, r.dir);
     const palette = PALETTES[spec.palette];
-    const ox = entry.tx * TILE;
-    const oy = entry.ty * TILE;
+
+    // Mini grids are trimmed to their own ink, so each cat's size depends on
+    // its pose — read the bounds rather than assuming a fixed sprite box.
+    const w = grid[0]?.length ?? 0;
+    const h = grid.length;
+
+    // Feet sit on the tile centre, so the cat stands on the path rather than
+    // hanging off its top-left corner.
+    const ox = Math.round(r.tx * TILE + TILE / 2 - w / 2);
+    const oy = Math.round(r.ty * TILE + TILE / 2 - h + 2);
+
     for (let y = 0; y < grid.length; y++) {
       for (let x = 0; x < grid[y].length; x++) {
         const key = grid[y][x];
         if (!key || key === '.') continue;
         const raw = (palette as Record<string, string>)[key] ?? palette.B;
-        c.p.rect(ox + x, oy + y, 1, 1, night ? dimForNight(raw) : raw);
+        painter.rect(ox + x, oy + y, 1, 1, night ? dimForNight(raw) : raw);
       }
     }
-  });
+  }
 }
 
 /* -------------------------------- entry -------------------------------- */
@@ -429,7 +447,7 @@ export function drawTown(
   pal: TownPalette,
   roofs: Record<RoofKey, RoofColor>,
   grid: Tile[][],
-  opts: { cats?: boolean; night?: boolean } = {}
+  opts: { night?: boolean } = {}
 ): void {
   const c: Ctx = { p: painter, pal, roofs, grid };
   for (let ty = 0; ty < MAP_H; ty++) for (let tx = 0; tx < MAP_W; tx++) drawTile(c, tx, ty);
@@ -438,5 +456,5 @@ export function drawTown(
   BUILDINGS.forEach((b) => drawBuilding(c, b));
   drawGreenhouse(c);
   drawPlotSigns(c);
-  if (opts.cats !== false) drawCats(c, opts.night ?? false);
+  // Cats are no longer part of the static town — see drawRoamers.
 }

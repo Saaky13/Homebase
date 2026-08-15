@@ -191,15 +191,16 @@ export function buildTownGrid(): Tile[][] {
 }
 
 /**
- * Cats loitering around town. Positions are in tiles; `dir` is one of the
- * eight strings the movement code already produces, so these can later be
- * driven by a wander behaviour without changing shape.
+ * The cats that wander town before anything has been unlocked. Fixed
+ * positions and facings used to live here; a roaming behaviour picks both at
+ * runtime now, so all this needs to carry is who shows up. Unlocking cats
+ * appends to this list rather than replacing it — see TownMap.
  */
-export const TOWN_CATS: Array<{ catId: string; tx: number; ty: number; dir: string }> = [
-  { catId: 'mochi', tx: 13, ty: 24, dir: 'front' },
-  { catId: 'pistachio', tx: 25, ty: 20, dir: 'front_left' },
-  { catId: 'indigo', tx: 20, ty: 35, dir: 'left' },
-  { catId: 'clover', tx: 9, ty: 44, dir: 'front_right' },
-  { catId: 'sunbeam', tx: 26, ty: 62, dir: 'back' },
-  { catId: 'koi', tx: 34, ty: 46, dir: 'right' },
+export const STARTER_TOWN_CATS: string[] = [
+  'mochi',
+  'pistachio',
+  'indigo',
+  'clover',
+  'sunbeam',
+  'koi',
 ];
