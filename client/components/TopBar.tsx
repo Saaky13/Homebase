@@ -1,5 +1,6 @@
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { usePathname, useRouter } from 'expo-router';
 
 import { useCafeState } from '../hooks/useCafeState';
@@ -42,12 +43,22 @@ export default function TopBar() {
   const { state } = useCafeState();
   const pathname = usePathname();
   const router = useRouter();
+  const insets = useSafeAreaInsets();
 
   const onMap = pathname === '/' || pathname === '';
   const title = TITLES[pathname];
 
   return (
-    <View style={[styles.bar, onMap ? styles.barFloating : styles.barSolid]}>
+    // The bar is the topmost thing on every screen, so it owns the status-bar
+    // inset: its background fills the notch area and its contents start below
+    // it. Without this the pills and the back button land under the clock.
+    <View
+      style={[
+        styles.bar,
+        onMap ? styles.barFloating : styles.barSolid,
+        { paddingTop: insets.top + 8 },
+      ]}
+    >
       {onMap ? (
         <Text style={styles.brand}>Homebase</Text>
       ) : (
@@ -78,7 +89,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
     paddingHorizontal: 12,
-    paddingTop: 10,
+    // paddingTop is applied inline from the safe-area inset.
     paddingBottom: 8,
   },
   // Solid in both modes on purpose: a translucent bar over a busy pixel map

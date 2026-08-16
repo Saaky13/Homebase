@@ -2,14 +2,16 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Animated,
+  KeyboardAvoidingView,
+  Platform,
   Pressable,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useCafeState } from '../../hooks/useCafeState';
 import { colors } from '../../constants/colors';
@@ -107,6 +109,7 @@ function ThreeDButton({
 
 export default function HabitsTab() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const {
     state,
     isLoading,
@@ -1048,8 +1051,21 @@ export default function HabitsTab() {
   );
 
   return (
-    <SafeAreaView style={styles.container}>
-      <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
+    // The mission and to-do inputs sit low on the screen, so the whole hub
+    // lifts with the keyboard rather than letting it cover what's being typed.
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+    >
+      <ScrollView
+        style={styles.scrollView}
+        contentContainerStyle={{ paddingBottom: insets.bottom + 30 }}
+        showsVerticalScrollIndicator={false}
+        // Lets a button be tapped directly while the keyboard is open,
+        // instead of the first tap only dismissing it.
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="interactive"
+      >
         {section !== 'hub' && (
           <Pressable
             onPress={() => setSection('hub')}
@@ -1068,10 +1084,8 @@ export default function HabitsTab() {
         {section === 'todo' && renderTodo()}
         {section === 'achievements' && renderAchievements()}
         {section === 'resources' && renderResources()}
-
-        <View style={{ height: 30 }} />
       </ScrollView>
-    </SafeAreaView>
+    </KeyboardAvoidingView>
   );
 }
 

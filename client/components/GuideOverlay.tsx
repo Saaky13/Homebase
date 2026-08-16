@@ -1,12 +1,15 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
+  Keyboard,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { usePathname, useRouter } from 'expo-router';
 import { useCafeState } from '../hooks/useCafeState';
 import { buildGuideContext, resolveGuideMessage } from '../hooks/guideEngine';
@@ -30,13 +33,35 @@ export default function GuideOverlay() {
     muteGuideMessage,
   } = useCafeState();
 
+  const insets = useSafeAreaInsets();
   const [nameDraft, setNameDraft] = useState(state.userName || '');
   const [activeBeatId, setActiveBeatId] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
   const translateY = useRef(new Animated.Value(140)).current;
   const opacity = useRef(new Animated.Value(0)).current;
 
   const needsName = !state.userName;
+
+  // The card is absolutely positioned, so a KeyboardAvoidingView can't lift it
+  // the way it would a normal layout child — it has to follow the keyboard
+  // itself, or the name prompt ends up underneath the thing typing into it.
+  useEffect(() => {
+    // `will` events fire before the keyboard animates in, so the card travels
+    // with it rather than after it. Android only emits the `did` pair.
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+
+    const show = Keyboard.addListener(showEvent, (event) =>
+      setKeyboardHeight(event.endCoordinates.height)
+    );
+    const hide = Keyboard.addListener(hideEvent, () => setKeyboardHeight(0));
+
+    return () => {
+      show.remove();
+      hide.remove();
+    };
+  }, []);
 
   // Several beats are gated purely by time (min-gap, cooldowns, snoozes),
   // so re-evaluation can't rely on state changes alone — a queue that never
@@ -127,6 +152,9 @@ export default function GuideOverlay() {
         {
           opacity,
           transform: [{ translateY }],
+          // Sits just above the keyboard while typing, and just above the
+          // home indicator otherwise.
+          bottom: keyboardHeight > 0 ? keyboardHeight + 12 : insets.bottom + 16,
         },
       ]}
     >
@@ -149,6 +177,10 @@ export default function GuideOverlay() {
               placeholder="Enter your name"
               placeholderTextColor="#9A8D95"
               style={styles.input}
+              autoCapitalize="words"
+              autoCorrect={false}
+              returnKeyType="done"
+              onSubmitEditing={handleSaveName}
             />
 
             <Pressable onPress={handleSaveName} style={styles.primaryButton}>
@@ -215,7 +247,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: 12,
     right: 12,
-    bottom: 92,
+    // `bottom` is applied inline — it tracks the keyboard and the safe area.
     zIndex: 200,
   },
   card: {
