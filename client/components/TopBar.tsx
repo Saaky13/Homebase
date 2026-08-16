@@ -3,6 +3,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { usePathname, useRouter } from 'expo-router';
 
 import { useCafeState } from '../hooks/useCafeState';
+import { CoinIcon, PearlIcon } from './Icons';
 
 const TITLES: Record<string, string> = {
   '/cafe': 'Café',
@@ -10,9 +11,22 @@ const TITLES: Record<string, string> = {
   '/habits': 'Growth Hub',
 };
 
-function Pill({ label, value, bg, fg }: { label: string; value: string; bg: string; fg: string }) {
+function Pill({
+  label,
+  value,
+  bg,
+  fg,
+  icon,
+}: {
+  label: string;
+  value: string;
+  bg: string;
+  fg: string;
+  icon?: React.ReactNode;
+}) {
   return (
     <View style={[styles.pill, { backgroundColor: bg }]}>
+      {icon}
       <Text style={[styles.pillValue, { color: fg }]}>{value}</Text>
       <Text style={[styles.pillLabel, { color: fg }]}>{label}</Text>
     </View>
@@ -49,8 +63,8 @@ export default function TopBar() {
       {title ? <Text style={styles.title}>{title}</Text> : null}
 
       <View style={styles.pills}>
-        <Pill label="coins" value={String(state.coins)} bg="#F5D273" fg="#6B4A16" />
-        <Pill label="pearls" value={String(state.pearls)} bg="#E0B8E8" fg="#553067" />
+        <Pill label="coins" value={String(state.coins)} bg="#F5D273" fg="#6B4A16" icon={<CoinIcon size={13} />} />
+        <Pill label="pearls" value={String(state.pearls)} bg="#E0B8E8" fg="#553067" icon={<PearlIcon size={13} />} />
         <Pill label="level" value={String(state.level)} bg="#F2A0BC" fg="#6B2038" />
       </View>
     </View>
@@ -93,7 +107,7 @@ const styles = StyleSheet.create({
   pills: { flexDirection: 'row', gap: 6, marginLeft: 'auto' },
   pill: {
     flexDirection: 'row',
-    alignItems: 'baseline',
+    alignItems: 'center',
     gap: 4,
     borderRadius: 999,
     paddingHorizontal: 9,
