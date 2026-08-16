@@ -272,8 +272,18 @@ export const GUIDE_SCRIPT: GuideBeat[] = [
     priority: 33,
     actions: [GOT_IT],
     message: () =>
-      `coins turn into new cats, flavors, and decor here. everything you unlock sticks around and changes how your café looks.`,
+      `coins turn into new flavors and decor here. everything you unlock sticks around and changes how your café looks.`,
     match: (ctx) => ctx.pathname.includes('/shop'),
+  },
+  {
+    id: 'shelter-first-visit',
+    icon: '🐾',
+    title: 'thirty-six cats out there',
+    priority: 32,
+    actions: [GOT_IT],
+    message: () =>
+      `a hundred coins turns the crank, and you'll never pull one you already have. every cat you adopt moves in — wandering the town and dropping by the café.`,
+    match: (ctx) => ctx.pathname.includes('/cats'),
   },
 
   // ---- gentle recurring reminders, lowest priority tier ----------------

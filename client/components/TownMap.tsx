@@ -7,30 +7,16 @@ import { useRouter } from 'expo-router';
 import { createCanvasPainter } from '../town/canvasPainter';
 import { drawRoamers, drawTown } from '../town/draw';
 import {
-  BUILDINGS, buildTownGrid, FOUNTAIN, MAP_PX_H, MAP_PX_W, STARTER_TOWN_CATS, TILE,
+  BUILDINGS, buildTownGrid, FOUNTAIN, MAP_PX_H, MAP_PX_W, TILE,
 } from '../town/map';
 import {
   DAY_PALETTE, DAY_ROOFS, isNightAt, nightPalette, nightRoofs,
 } from '../town/palette';
 import { createRoamers, stepRoamers } from '../town/roam';
-import { CAT_ROSTER } from '../constants/catSprites';
 import { useCafeState } from '../hooks/useCafeState';
 
 /** Keeps the town lively without turning the paths into a parade. */
 const MAX_ROAMERS = 16;
-
-/**
- * Who is out walking. The starter cats are always around; every cat unlocked
- * in the shop adds another to the street, which is the whole point — progress
- * should be visible on the map rather than only in a menu.
- */
-function roamingCatIds(unlockedItems: string[]): string[] {
-  const unlockedCats = unlockedItems.filter((id) => id.startsWith('cat-')).length;
-  const extras = CAT_ROSTER.map((c) => c.id).filter(
-    (id) => !STARTER_TOWN_CATS.includes(id)
-  );
-  return [...STARTER_TOWN_CATS, ...extras.slice(0, unlockedCats)].slice(0, MAX_ROAMERS);
-}
 
 /** Tap target around the fountain — the Growth Hub entrance. */
 const FOUNTAIN_HIT = {
@@ -51,10 +37,11 @@ export default function TownMap({ night }: { night?: boolean }) {
   // The grid comes from stable noise, so it only needs building once.
   const grid = useMemo(() => buildTownGrid(), []);
 
-  // Joined into a string so the animation effect restarts only when the cast
-  // actually changes, not on every state write.
-  const catKey = roamingCatIds(state.unlockedItems).join(',');
-  const catIds = useMemo(() => catKey.split(','), [catKey]);
+  // The cats out walking are exactly the ones you've adopted — a cat you don't
+  // own is nowhere in the app. Joined into a string so the animation effect
+  // restarts only when the cast actually changes, not on every state write.
+  const catKey = state.ownedCats.slice(0, MAX_ROAMERS).join(',');
+  const catIds = useMemo(() => (catKey ? catKey.split(',') : []), [catKey]);
 
   // The map is 384px wide; narrower phones scale it down rather than clip.
   const scale = Math.min(1, width / MAP_PX_W);

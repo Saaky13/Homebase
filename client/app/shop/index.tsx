@@ -52,7 +52,6 @@ export default function ShopTab() {
   };
 
   const groupedItems = {
-    cats: SHOP_ITEMS.filter((item) => item.category === 'cats'),
     flavors: SHOP_ITEMS.filter((item) => item.category === 'flavors'),
     decor: SHOP_ITEMS.filter((item) => item.category === 'decor'),
     upgrades: SHOP_ITEMS.filter((item) => item.category === 'upgrades'),
@@ -90,10 +89,6 @@ export default function ShopTab() {
           <Text style={styles.coinAmount}>{state.coins}</Text>
           <Text style={styles.coinSubtext}>Use coins to style your café</Text>
         </View>
-
-        {groupedItems.cats.length > 0 && (
-          <Section title="New Cats" data={groupedItems.cats} renderItem={renderItem} />
-        )}
 
         {groupedItems.flavors.length > 0 && (
           <Section title="Boba Flavors" data={groupedItems.flavors} renderItem={renderItem} />

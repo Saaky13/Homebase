@@ -17,8 +17,16 @@ npm run web -- --port 8090
 The dev server preview is configured in `.claude/launch.json` under the name
 `cat-cafe-web` on port 8090. Use that to launch in the Browser pane.
 
-Platform: **web only** right now. The app runs via Expo on `react-native-web`.
-No native iOS/Android builds have been done yet.
+Platform: **web is the verified target.** The app runs via Expo on
+`react-native-web`. A native path exists — `app.json` carries iOS/Android
+config (`com.saaky13.homebase`, new architecture on), the café renders through
+Skia which is linked into a native binary, and `CafeCanvasHost.native.tsx`
+skips the web-only CanvasKit loader — but **no native build has been run or
+verified end to end.** Treat native as wired, not working.
+
+`npm install` runs a `postinstall` hook (`scripts/copy-canvaskit.js`) that
+stages the CanvasKit WASM payload for web. A fresh clone that skips postinstall
+will fail on the café screen.
 
 ---
 
@@ -28,7 +36,7 @@ No native iOS/Android builds have been done yet.
 |---|---|
 | Framework | React Native (Expo 54) with expo-router 6 |
 | Language | TypeScript 5.9, React 19.1 |
-| Rendering | HTML5 Canvas (café floor 390×844, town map 384×736, cat sprites 28px) |
+| Rendering | Skia via `@shopify/react-native-skia` for the café floor (390×844, through the Canvas2D-shaped shim in `components/skiaCanvas2d.ts`); HTML5 Canvas for the town map (384×736); cat sprites 28×37 |
 | State | React Context + AsyncStorage (`@focus_cafe_state_v2` key) |
 | Styling | React Native `StyleSheet` — no CSS-in-JS libs, no Tailwind |
 | Animation | `requestAnimationFrame` game loop (café), `Animated` API (UI) |
@@ -50,49 +58,65 @@ cat cafe/
     ├── app/                 # expo-router pages
     │   ├── _layout.tsx      # root layout (CafeProvider, TopBar, GuideOverlay, Stack)
     │   ├── index.tsx        # TownScreen — the home screen (pixel-art town map)
-    │   ├── cafe/index.tsx   # CafeTab — canvas café floor with cats, queue, serve button
-    │   ├── habits/index.tsx # HabitsTab — the "Growth Hub" (~1630 lines, all 7 sections + hub grid)
-    │   ├── shop/index.tsx   # ShopTab — coin-based shop (cats, flavors, decor, upgrades)
+    │   ├── cafe/index.tsx   # CafeTab — Skia café floor with cats, queue, serve button
+    │   ├── habits/index.tsx # HabitsTab — the "Growth Hub" (~2130 lines, all 8 sections + hub grid)
+    │   ├── shop/index.tsx   # ShopTab — coin-based shop (flavors, decor, upgrades)
+    │   ├── cats/index.tsx   # CatsTab — the Cat Shelter (Adopt + Collection tabs)
     │   └── habit-form.tsx   # modal form for creating/editing habits
     │
     ├── components/
-    │   ├── CafeCanvas.tsx   # Canvas game loop — cat spawning, queuing, seating, serving
+    │   ├── CafeCanvas.tsx   # Skia game loop — cat spawning, queuing, seating, serving
+    │   ├── CafeCanvasHost.tsx        # web entry — defers CafeCanvas until CanvasKit loads
+    │   ├── CafeCanvasHost.native.tsx # native entry — re-exports CafeCanvas directly
+    │   ├── skiaCanvas2d.ts  # Canvas2D-shaped facade over Skia's imperative canvas
     │   ├── Cat.tsx          # Cat entity model — state machine, movement, drawing
+    │   ├── catImageCache.ts # Rasterises each cat×direction into a cached SkImage
+    │   ├── CatSprite.tsx    # React cat sprite — SVG data-URI <Image>, no canvas
+    │   ├── GachaMachine.tsx # Pixel capsule machine with animated crank + drop
+    │   ├── AdoptionReveal.tsx  # Full-screen reveal after an adoption
     │   ├── CurrencyBar.tsx  # Coins + Pearls bar (unused — replaced by TopBar pills)
     │   ├── FocusSection.tsx # Focus timer UI — rendered as a Growth Hub section
     │   ├── GuideOverlay.tsx # Animated bottom sheet — name prompt + contextual guide beats
-    │   ├── Icons.tsx        # SVG icon components
+    │   ├── Icons.tsx        # Coin / Pearl / Popularity pixel icons as SVG data-URIs
     │   ├── PopularityMeter.tsx  # Popularity bar shown on the café screen
     │   ├── TopBar.tsx       # Persistent top bar — brand, back button, coin/pearl/level pills
     │   ├── TownMap.tsx      # Pixel-art town map component (canvas-rendered)
     │   ├── cafeConfig.ts    # Café layout constants — 10 table center coordinates
-    │   ├── cafeRender.ts    # Canvas drawing helpers — background, tables, counter, floor tiles
-    │   └── images/          # App icons, splash screen
+    │   └── cafeRender.ts    # Canvas drawing helpers — background, tables, counter, floor tiles
     │
     ├── constants/
-    │   ├── cafeData.ts      # Cat roster (7 cats), shop items (10), reflection prompts (4), café levels (5)
+    │   ├── achievements.ts  # 29 achievements across 6 categories + category colour defs
+    │   ├── cafeData.ts      # Legacy cat roster (7), shop items (7), reflection prompts (4), café levels (5)
     │   ├── catSprites.ts    # Procedural pixel-art cat system — 36 palettes, 9 patterns, grid assembly, roster of 36 cats
     │   ├── colors.ts        # Shared colour palette (cream, brown, gold, pastels, etc.)
-    │   ├── guideScript.ts   # All guide beats — 20+ contextual messages with priority/match/cooldown
+    │   ├── gacha.ts         # Adoption draw — rarity weights, pickCat, starters, save seeding
+    │   ├── gachaMachine.ts  # Pixel art for the capsule machine (36×54 grid, crank, capsules)
+    │   ├── guideScript.ts   # All guide beats — 25 contextual messages with priority/match/cooldown
     │   ├── habitTiers.ts    # Keystone/Anchor/Quick tier definitions, pearl math functions
     │   └── popularity.ts    # Popularity system — decay, gains, café multiplier, spawn pacing
     │
     ├── hooks/
     │   ├── guideEngine.ts   # Guide resolution engine — picks highest-priority eligible beat
-    │   ├── useCafeState.tsx  # THE state file (~1360 lines) — CafeProvider, all actions, persistence, migrations
+    │   ├── useCafeState.tsx  # THE state file (~1500 lines) — CafeProvider, all actions, persistence, migrations
     │   └── use-color-scheme.ts/web.ts
     │
     ├── town/
-    │   ├── map.ts           # Town grid layout (48×92 tiles, 8px each), 26 building specs, 4 empty plots
+    │   ├── map.ts           # Town grid layout (48×92 tiles, 8px each), 28 building specs, 4 empty plots
     │   ├── draw.ts          # Town rendering — buildings, roads, trees, cats, fountain
+    │   ├── roam.ts          # Roaming cats — BFS pathing over walkable tiles
     │   ├── palette.ts       # Day/night colour palettes (night 7pm–6am, navy-tinted)
     │   └── canvasPainter.ts # Canvas abstraction (web path; native would swap in Skia)
     │
     ├── utils/
-    │   └── date.ts          # Date key helpers, streak computation, habit log types
+    │   ├── date.ts          # Date key helpers, streak computation, habit log types
+    │   └── pixelSvg.ts      # Shared grid → SVG data-URI encoder (icons, cats, machine)
     │
-    ├── public/
-    │   └── cat_pics/        # 8 directional cat sprite PNGs (legacy, before procedural system)
+    ├── scripts/
+    │   └── copy-canvaskit.js  # postinstall — stages the CanvasKit WASM payload for web
+    │
+    ├── assets/
+    │   ├── cats/            # 8 directional cat PNGs (legacy — no longer referenced)
+    │   └── images/          # App icons, splash screen
     │
     └── web/
         └── globals.css      # Minimal global CSS reset
@@ -110,12 +134,13 @@ The app uses a **Stack navigator** (no tab bar). The town map is the home screen
 | `/cafe` | Café Floor | Tap the café building on the town map |
 | `/habits` | Growth Hub | Tap the fountain, library, mission hall, or archive on the town map |
 | `/shop` | Market | Tap the market building on the town map |
+| `/cats` | Cat Shelter | Tap the shelter building on the town map |
 | `/habit-form` | Habit Form | From Growth Hub → Habits → "+ New habit" or long-press a habit tile |
 
 The **TopBar** (`components/TopBar.tsx`) is rendered outside the Stack in `_layout.tsx`
 so it persists across all screens. It shows:
 - "Homebase" brand text on the map, "‹ Town" back button on sub-screens
-- The current screen title (Café, Market, Growth Hub)
+- The current screen title (Café, Market, Growth Hub, Cat Shelter)
 - Three pills: coins (gold), pearls (purple), level (pink)
 
 The **GuideOverlay** (`components/GuideOverlay.tsx`) also lives outside the Stack —
@@ -169,6 +194,9 @@ interface CafeState {
   guide: GuideState;                         // guide system state (seen/muted beats, cooldowns, snooze)
   focusSessionActive: boolean;               // hides guide overlay during focus
   focusTimer: FocusTimer;                    // focus session state
+  claimedAchievements: string[];             // achievement ids whose pearls were claimed
+  ownedCats: string[];                       // roster ids adopted from the shelter
+  revealActive: boolean;                     // adoption reveal on screen; never persisted
 }
 ```
 
@@ -215,14 +243,21 @@ interface FocusTimer {
 interface TodoItem { id: string; text: string; done: boolean; }
 
 interface CafeVisuals { tableStyle: number; counterStyle: number; rugStyle: number; }
+
+type AdoptResult =
+  | { ok: true; cat: CatSpec }
+  | { ok: false; reason: 'coins' | 'complete' };
 ```
 
 **Persistence:** Debounced writes to AsyncStorage (250ms delay). Storage key:
 `@focus_cafe_state_v2`. On load, the provider runs migrations for legacy habit
 formats (old array-based logs → Record-based, old habits without tiers → anchor
-default) and recomputes popularity decay.
+default), seeds `ownedCats` for pre-shelter saves via `seedOwnedCats()` (starters
+plus one common per `cat-*` item previously bought in the Market), and recomputes
+popularity decay.
 
-**Initial state:** 100 pearls, 0 coins, level 1, popularity 0, empty habits/logs/todos.
+**Initial state:** 100 pearls, 0 coins, level 1, popularity 0, empty habits/logs/todos,
+`ownedCats: [...STARTER_CATS]` (mochi, clover, pebble).
 
 **State mutation pattern:** All mutations go through the `commit()` helper which
 calls `setState` + schedules a debounced save. Individual actions (e.g. `logHabitRep`,
@@ -272,6 +307,9 @@ These are the functions available on the context object returned by `useCafeStat
 | `snoozeGuideMessages` | `(minutes: number) => void` | Silences guide for N minutes |
 | `muteGuideMessage` | `(id: string) => void` | Permanently mutes a repeatable beat |
 | `setFocusSessionActive` | `(active: boolean) => void` | Tells guide overlay to hide during focus |
+| `claimAchievement` | `(achievementId, pearlReward) => boolean` | Adds id to `claimedAchievements` + pays pearls, once |
+| `adoptCat` | `() => AdoptResult` | Spends 100 coins, draws an unowned cat, adds it to `ownedCats` |
+| `setRevealActive` | `(active: boolean) => void` | Tells guide overlay to hide during an adoption reveal |
 
 **Derived values on the context (not actions):**
 
@@ -299,12 +337,17 @@ Pearls → Spent to serve cats (5 pearls per cat)
          ↓
 Serving cats → Coins (25 per cat) + Popularity (0.1 per cat)
          ↓
-Coins → Shop upgrades (decor, cats, flavors)
-         ↓
-Upgrades → Café quality multiplier (1.0×–2.0×) → More popularity per action
+Coins → Shop upgrades (decor, flavors) ── or ── Cat Shelter adoption (100/pull)
+         ↓                                              ↓
+Upgrades → Café quality multiplier (1.0×–2.0×)   Adopted cats roam the town
+         → More popularity per action             and visit the café
          ↓
 Popularity → Cat spawn rate + group size → More cats to serve → More coins
 ```
+
+Coins have two sinks: café quality (which compounds, via the multiplier) and
+the shelter (which doesn't compound — it's the collection reward). Only the
+first feeds back into the loop.
 
 **Focus timer rates:** 1 boba per 60 seconds, 1 pearl per 300 seconds.
 These constants are `SECONDS_PER_BOBA` and `SECONDS_PER_PEARL` in `useCafeState.tsx`.
@@ -394,26 +437,48 @@ of colour keys assembled from:
 **Facing system:** 5 authored angles (front, front_side, side, back_side, back)
 × horizontal mirror = 8 directions. Grids are cached per cat×direction.
 
-The café canvas currently uses the legacy PNG sprites in `public/cat_pics/`.
-The procedural system is built and ready but not yet wired to the café renderer.
+**Where the sprites are drawn:**
+- **Café floor** — `components/catImageCache.ts` rasterises each cat×direction once
+  into an `SkImage` via an offscreen Skia surface, cached forever. Painting a
+  ~1,000-cell grid per cat per frame is not viable at 60fps.
+- **Town map** — drawn straight onto the 2D canvas by `town/draw.ts`.
+- **React (collection, reveal)** — `components/CatSprite.tsx` renders a grid as an
+  SVG data-URI `<Image>` via `utils/pixelSvg.ts`. No canvas, no Skia.
+
+The legacy PNGs in `client/assets/cats/` are no longer referenced.
 
 ---
 
-## Café canvas (components/CafeCanvas.tsx + Cat.tsx + cafeRender.ts + cafeConfig.ts)
+## Café canvas (CafeCanvas.tsx + Cat.tsx + cafeRender.ts + cafeConfig.ts + skiaCanvas2d.ts)
 
-The café floor is a full-screen `<canvas>` (390×844 logical pixels) with a
-`requestAnimationFrame` loop.
+The café floor is a full-screen Skia `<Canvas>` (390×844 logical pixels) driven
+by a `requestAnimationFrame` loop. Each frame is recorded into an `SkPicture`
+published as a reanimated `SharedValue`, so Skia repaints without a React
+re-render 60 times a second.
+
+**Platform entrypoints:** screens import `CafeCanvasHost`, never `CafeCanvas`.
+On web (`CafeCanvasHost.tsx`) Skia is CanvasKit — a WASM module — and the
+`Skia` object is undefined until it loads, so `WithSkiaWeb` defers the import;
+importing `CafeCanvas` statically is enough to crash on the first `Skia.*`
+call. On native, Metro resolves `CafeCanvasHost.native.tsx`, which re-exports
+`CafeCanvas` directly since Skia is linked into the binary. The WASM load is
+scoped to this screen so the rest of the app never waits on a payload it
+doesn't use.
+
+Drawing code targets `Ctx2D` from `skiaCanvas2d.ts` and stays
+platform-agnostic — see convention 6.
 
 ### Cat entity (Cat.tsx)
 
 ```typescript
 interface Cat {
   id: string;
+  catId: string;           // which roster cat this is — drawn from state.ownedCats
   groupId: string;
   x: number; y: number;
   targetX: number; targetY: number;
   speed: number;           // 3 pixels/frame
-  size: number;            // 26 (drawn at size * 1.8 = ~47px)
+  size: number;            // 26 (width = size * 1.8 ≈ 47px; height follows the 28×37 grid)
   state: CatState;         // 'walkingToLine' | 'waiting' | 'walkingToSeat' | 'seated' | 'leaving'
   seatIndex: number | null;
   lineOffsetX: number;
@@ -424,7 +489,16 @@ interface Cat {
 
 **Cat functions:** `createCat()`, `updateCat()` (per-frame movement),
 `retargetCat()` (reposition in queue), `sendCatToSeat()`, `sendCatOut()`,
-`isCatOffscreen()`, `drawCat()` (renders sprite + shadow ellipse).
+`isCatOffscreen()`, `drawCat(ctx, cat)` (renders sprite + shadow ellipse).
+
+`drawCat` pulls its `SkImage` from `catImageCache.getCatSkImage(cat.catId,
+direction)` — it takes no sprite argument. Sprites are **not** square: height is
+`width * catAspectRatio(catId)` off the 28×37 grid, and the shadow ellipse is
+anchored at the feet rather than the centre.
+
+**Who visits:** each spawned cat picks a random id from `state.ownedCats`. A
+player with nothing adopted gets no visitors at all — in practice impossible,
+since the collection is seeded with three starters.
 
 ### Table layout (cafeConfig.ts)
 
@@ -520,6 +594,7 @@ A contextual message system that surfaces the right nudge at the right time.
 | `focus-first-visit` | 35 | no | — | On habits:focus |
 | `cafe-first-visit` | 34 | no | — | On /cafe route |
 | `shop-first-visit` | 33 | no | — | On /shop route |
+| `shelter-first-visit` | 32 | no | — | On /cats route |
 | `mission-unclaimed-today` | 20 | yes | 20h | Has mission, not checked in today |
 | `no-focus-yet-today` | 18 | yes | 20h | After 1pm, no focus today |
 | `mission-empty-nudge` | 15 | yes | 48h | No mission set |
@@ -547,11 +622,11 @@ includes `/habits` AND that `state.guideContext === 'habits:${section}'`.
 
 ## Growth Hub sections (app/habits/index.tsx)
 
-The Growth Hub is a single screen (~1630 lines) with a local `section` state:
+The Growth Hub is a single screen (~2130 lines) with a local `section` state:
 
 ```typescript
 type HubSection = 'hub' | 'habits' | 'mission' | 'reflection' | 'focus'
-                | 'calendar' | 'resources' | 'todo';
+                | 'calendar' | 'resources' | 'todo' | 'achievements';
 ```
 
 ### Hub tile grid
@@ -567,6 +642,10 @@ Each section has a `ThreeDButton` tile with these colours:
 | To-Do | `tilePeach` | `#FFDDBF` | `#E8B38E` | `#E8B38E` |
 | Focus | `tileMint` | `#D9F5EA` | `#9FD5BF` | `#7FC8AB` |
 | Resources | `tileMintAlt` | `#DDF8F2` | `#9FDCCB` | `#8ED4BE` |
+| Achievements | `tileGold` | `#FFE7A3` | `#E3C26B` | `#D6B052` |
+
+`tileGold` is deliberately a deeper amber than Reflection's `tileButter` so the
+two don't read as the same tile.
 
 **ThreeDButton component anatomy:**
 - Shadow layer: `tileShadowLayer` (48% width, 4px bottom margin)
@@ -579,7 +658,7 @@ Each section has a `ThreeDButton` tile with these colours:
 
 | Section | Key render function | What it shows |
 |---|---|---|
-| `hub` | `renderHub()` | Grid of 7 ThreeDButton tiles + hero card |
+| `hub` | `renderHub()` | Grid of 8 ThreeDButton tiles + hero card |
 | `habits` | `renderHabits()` (inline) | Today progress ring, habit tiles grouped by tier (via `TIER_ORDER`), "+ New habit" button |
 | `mission` | inline in return | Mission TextInput + save button, daily check-in (+25 pearls) |
 | `reflection` | inline in return | `getReflectionPromptForDate(todayKey)` — rotating daily question with 4 multiple-choice answers (2–5 pearls each) |
@@ -587,6 +666,7 @@ Each section has a `ThreeDButton` tile with these colours:
 | `calendar` | inline in return | Month view with prev/next, per-day habit count dots, tap-to-drill-down stats |
 | `todo` | inline in return | Text input, add button, list with check/delete |
 | `resources` | inline in return | "Coming soon" placeholder cards |
+| `achievements` | `renderAchievements()` | 29 achievements grouped by category, filter chips, claim pills |
 
 **The section state is a `useState`, not a route.** Navigating to `/habits`
 always lands on the hub grid first. The "← Back to Hub" button resets to hub.
@@ -653,15 +733,33 @@ navigate to the app's screens.
 | `archive` | (6, 17) | 5×4 | Archive | `/habits` |
 | `cafe` | (4, 27) | 5×5 | Café | `/cafe` |
 | `market` | (17, 28) | 5×4 | Market | `/shop` |
+| `shelter` | (17, 34) | 5×4 | Cat Shelter | `/cats` |
 
 Other buildings (inn, bakery, observatory, grocer, workshop, nursery, shrine,
 15 houses) are scenery — no route yet. 4 empty plots rendered as dirt rings
 with signposts.
 
-### Wandering cats on the town map
+The shelter is sited beside the café and market rather than on one of the
+southern empty plots, since it's somewhere you visit often and those plots are
+a long scroll from everything else.
 
-6 cats placed at fixed tile positions: mochi, pistachio, indigo, clover, sunbeam, koi.
-Each has a direction (front, front_left, left, etc.) for sprite rendering.
+### Wandering cats on the town map (town/roam.ts)
+
+The cast is **exactly `state.ownedCats`**, capped at `MAX_ROAMERS = 16`. There
+is no fixed list and no separate unlock path — a cat you haven't adopted exists
+nowhere in the app.
+
+Cats don't step randomly. Each picks a destination across town and follows a
+breadth-first route over walkable tiles (`S` stone, `R` road, `o` paved plots),
+which is what makes them cover the map — a random walk drifts outward only as
+√steps, so half the town never saw one. Positions are floats in **tile units**;
+pixels are purely a rendering concern.
+
+Tiles within `HEAD_CLEARANCE = 2` above a building footprint are non-walkable,
+because a cat is drawn ~2 tiles tall on a 1-tile footprint and would otherwise
+push its head through the brickwork.
+
+Key exports: `Roamer`, `walkableTiles()`, `createRoamers()`, `stepRoamers()`.
 
 ### Day/night cycle (palette.ts)
 
@@ -675,6 +773,7 @@ Each has a direction (front, front_left, left, etc.) for sprite rendering.
 ### Rendering files
 - `map.ts` — grid layout, `BuildingSpec` interface, `buildTownGrid()`, tree/grove generation
 - `draw.ts` — rendering: terrain, roads, buildings, trees, fountain, wandering cats
+- `roam.ts` — roamer state, walkable-tile graph, BFS routing, per-frame stepping
 - `palette.ts` — day/night palettes, `isNightAt()`, `nightPalette()`, `dimForNight()`
 - `canvasPainter.ts` — thin canvas abstraction (web path; native would swap in Skia)
 
@@ -686,9 +785,6 @@ Each has a direction (front, front_left, left, etc.) for sprite rendering.
 
 | ID | Title | Price (coins) | Category |
 |---|---|---|---|
-| `cat-orange` | Orange Cat | 50 | cats |
-| `cat-white` | White Cat | 50 | cats |
-| `cat-green` | Green Cat | 50 | cats |
 | `flavor-mango` | Mango Boba | 30 | flavors |
 | `flavor-taro` | Taro Boba | 30 | flavors |
 | `decor-plants` | Plant Decor | 40 | decor |
@@ -697,11 +793,20 @@ Each has a direction (front, front_left, left, etc.) for sprite rendering.
 | `upgrade-seating` | Better Seating | 100 | upgrades |
 | `upgrade-counter` | Modern Counter | 120 | upgrades |
 
-Only `decor` and `upgrades` categories affect the café quality multiplier.
+**7 items.** The Market used to sell three `cats` items (`cat-orange`,
+`cat-white`, `cat-green`, 50 coins each) that only incremented a counter. Cats
+now come from the Cat Shelter as real roster cats you own; existing saves
+migrate those purchases into the collection via `seedOwnedCats()`. The
+`cats` category no longer exists in the shop.
 
-### Legacy cat roster (used by queue system)
+Only `decor` and `upgrades` affect the café quality multiplier — 5 qualifying
+items, unchanged by the cat removal.
+
+### Legacy cat roster (`CATS_DATA`)
 
 7 cats: Luna 🐈‍⬛, Whiskers 🧡, Mittens 🤍, Sage 💚, Jazz 🟠, Shadow ⬛, Sunny 🌟.
+Still exported, tied to the legacy `queue` field. The café canvas draws roster
+cats from `ownedCats` instead and does not read this.
 
 ### Reflection prompts
 
@@ -725,6 +830,88 @@ stable throughout the day.
 | 5 | Legendary | 500 coins |
 
 Level-up formula: `coins >= level * 100`.
+
+---
+
+## Cat Shelter / adoption (constants/gacha.ts + app/cats/index.tsx)
+
+The coin sink that turns the 36-cat roster into a collection. Route `/cats`,
+two local tabs: `type Tab = 'adopt' | 'collection'`.
+
+### Draw rules
+
+- **Cost:** `PULL_COST_COINS = 100`
+- **No duplicates.** `pickCat()` filters to unowned cats before rolling, so a
+  pull is never wasted and the collection always completes.
+- **Rarity first, then cat.** The rarity bucket is chosen by weight and the cat
+  uniformly within it, so the odds describe the rarity you get rather than
+  being diluted by how many cats share it.
+- **Weights renormalise** over whichever rarities still have unadopted cats —
+  once the commons run out, their share redistributes across the rest.
+
+| Rarity | Weight | Cats |
+|---|---|---|
+| common | 60 | 12 |
+| rare | 25 | 10 |
+| epic | 11 | 8 |
+| legendary | 3.5 | 5 |
+| ultra | 0.5 | 1 |
+
+- **Starters:** `STARTER_CATS = ['mochi', 'clover', 'pebble']` — three commons,
+  enough that the town isn't empty on day one without gifting anything rare.
+- **`AdoptResult`** is `{ok: true, cat}` or `{ok: false, reason: 'coins' | 'complete'}`.
+
+**Everything in `gacha.ts` is pure** — no React, no state, no `Math.random()`.
+Rolls arrive as parameters, because `adoptCat` calls the draw from inside a
+state updater that React may invoke more than once per commit. `adoptCat` rolls
+once outside the updater and the updater re-checks `coins` and ownership before
+committing, so a double invocation can't double-charge or double-grant.
+
+### Other exports
+
+- `seedOwnedCats(unlockedItems)` — migration for pre-shelter saves
+- `catsOwnedByRarity(ownedIds)` — per-rarity progress for the Collection headers
+- `TOTAL_CATS`, `RARITY_WEIGHTS`
+
+### Presentation
+
+- `components/GachaMachine.tsx` — pixel capsule machine (36×54 grid from
+  `constants/gachaMachine.ts`), animated crank and capsule drop, `forwardRef` +
+  `useImperativeHandle` so the screen triggers the animation
+- `components/AdoptionReveal.tsx` — full-screen reveal; sets `revealActive` so
+  the guide overlay stays out of the way
+- `components/CatSprite.tsx` — collection grid sprites via `utils/pixelSvg.ts`
+
+---
+
+## Achievements (constants/achievements.ts)
+
+29 achievements across 6 categories, surfaced as the `achievements` Growth Hub
+section.
+
+Each has a `check(state)` predicate evaluated against **existing** state — no
+per-event counters were added, so old saves light up retroactively. The
+conditions are monotonic (you can't un-serve a cat), so earned stays earned.
+`check` receives an `AchievementCheckState`, a flattened view the caller maps
+once, rather than the full `CafeState`.
+
+Claiming pays `pearlReward` once; claimed ids live in `state.claimedAchievements`.
+
+| Category | Count | Tint | Edge | Ink |
+|---|---|---|---|---|
+| Habits 🌱 | 4 | `#D9F5EA` | `#9FD5BF` | `#2F6B54` |
+| Streaks 🔥 | 5 | `#FFDDBF` | `#E8B38E` | `#8A5A33` |
+| Focus ⏱ | 4 | `#CFEAFF` | `#8FC2E1` | `#38617D` |
+| Café ☕ | 6 | `#FFD7EA` | `#E7A9C8` | `#8A4A67` |
+| Cats 🐾 | 4 | `#DDD2FF` | `#B8A5EF` | `#4C3A7A` |
+| Economy 🪙 | 6 | `#FFF0BE` | `#E4C983` | `#7A6230` |
+
+`tint`/`edge`/`ink` extend the `tint`/`ink` convention from `habitTiers.ts`.
+`CATEGORY_BY_ID` is the lookup map.
+
+**Rendering:** earned cards fill with the category tint and take the app's hard
+shadow; locked ones ghost the emoji to `opacity: 0.28` rather than showing a
+padlock; the claim pill is pearl-purple (`#C8B6F2`).
 
 ---
 
@@ -805,31 +992,45 @@ cd client && npm run web -- --port 8090
 
 No tests exist yet. No linting is enforced beyond the Expo eslint config.
 
+**Note on the port.** `.claude/launch.json` hardcodes `--port 8090` in
+`runtimeArgs`, so `autoPort` cannot help — Expo tries 8090, finds it busy, and
+bails non-interactively. Changing ports requires editing **both** the `--port`
+flag and the `port` field. Parallel sessions therefore each have to edit a
+checked-in file, which is why `launch.json` frequently shows up dirty and
+should generally not be committed with a session-local port.
+
 ---
 
 ## What exists and what doesn't
 
 ### Built and working
-- Town map with day/night cycle, 26 buildings, wandering cats
-- Full café canvas with cat spawning, queuing, seating, serving (2 visual style variants)
-- Growth Hub with all 7 sections (habits, mission, reflection, focus, calendar, todo, resources)
+- Town map with day/night cycle, 28 buildings, cats roaming via BFS pathing
+- Full café floor rendered through Skia with cat spawning, queuing, seating,
+  serving (2 visual style variants)
+- Growth Hub with all 8 sections (habits, mission, reflection, focus, calendar,
+  todo, resources, achievements)
 - Three-tier habit system with rep logging, streaks, pearl math (budget + per-rep models)
 - Focus timer with boba/pearl payouts and break guidance
 - Mission statement with daily check-in (+25 pearls)
 - Daily reflection with rotating prompts (4 questions, 2–5 pearls)
 - Popularity system (10%/day proportional decay, café multiplier 1.0–2.0×, spawn pacing)
-- Shop with 10 items across 4 categories (cats, flavors, decor, upgrades)
-- Full guide/tutorial system with 24 contextual beats
-- Procedural cat sprite system (36 cats, 5 rarities, 9 patterns, 8 directions)
-- Persistent state with migrations (legacy array logs → record-based, old habits → tiered)
+- Shop with 7 items across 3 categories (flavors, decor, upgrades)
+- Achievements: 29 across 6 categories, retroactive `check` predicates, pearl claims
+- Full guide/tutorial system with 25 contextual beats
+- Procedural cat sprite system (36 cats, 5 rarities, 9 patterns, 8 directions),
+  wired into the café via `catImageCache`, the town via `town/draw.ts`, and
+  React via `CatSprite`
+- Cat Shelter: 100-coin gacha adoption, no duplicates, rarity-weighted draw
+  (`constants/gacha.ts`), pixel capsule machine, full-screen reveal, 36-cat collection
+- Adopted cats are the only cats in the app — they roam the town and visit the café
+- Persistent state with migrations (legacy array logs → record-based, old habits → tiered,
+  pre-shelter saves → seeded collection)
 - TopBar with currency pills persistent across all screens
 
 ### Not yet built
-- Achievements / milestones tab (planned for Growth Hub)
 - User XP / leveling system (separate from café level)
-- Cat chest / gacha system for unlocking cats
-- Wiring procedural sprites into the café canvas (still using legacy PNGs)
-- Native iOS/Android builds
+- **Verified native iOS/Android builds** — the Skia path, `app.json` config, and
+  `.native.tsx` entrypoints are in place, but no build has been run end to end
 - Sound design
 - Notifications / reminders
 - Backend / cloud sync
@@ -854,8 +1055,13 @@ No tests exist yet. No linting is enforced beyond the Expo eslint config.
 5. **The Growth Hub uses local section state, not routes.** Adding a new section
    means: add to `HubSection` type → add tile in `renderHub()` → add render
    function → add conditional in JSX return → set `guideContext` in `useEffect`.
-6. **Canvas rendering is imperative.** The café and town map draw to `<canvas>`
-   elements directly. Don't try to use React components inside them.
+6. **Canvas rendering is imperative.** The café and town map draw through a 2D
+   context directly. Don't try to use React components inside them. The café's
+   context is `Ctx2D` — Skia behind a Canvas2D-shaped facade
+   (`components/skiaCanvas2d.ts`), which is deliberately **not** a general
+   polyfill: it implements only what the café uses. Reaching for a 2D API the
+   café doesn't already call means adding it to the shim first, or it works on
+   web and breaks on native.
 7. **The guide system is data-driven.** Add new beats to `GUIDE_SCRIPT` in
    `guideScript.ts` — the engine picks them up automatically based on priority
    and match conditions. Section matching uses `onHabitsSection(ctx, sectionName)`.
@@ -868,3 +1074,14 @@ No tests exist yet. No linting is enforced beyond the Expo eslint config.
     This survives unmounts, app restarts, and throttled intervals. Pausing stores
     `remainingSeconds`; running derives remaining from `endsAt - Date.now()`.
     Offline time is never credited — a session mid-run at close comes back paused.
+11. **Pixel art goes through `utils/pixelSvg.ts`.** Currency icons, collection
+    cat sprites, and the capsule machine all encode a grid to an SVG data-URI
+    rendered by a React Native `<Image>` — not an inline `<svg>`, which doesn't
+    exist on native. The café is the exception: it needs `SkImage`s, so
+    `catImageCache.ts` rasterises each cat×direction once through an offscreen
+    Skia surface and caches it forever. A 28×37 grid is ~1,000 cells; painting
+    that per cat per frame at 60fps is not viable.
+12. **Draw functions that may run inside a state updater must be pure.** The
+    adoption draw (`constants/gacha.ts`) takes its rolls as parameters and calls
+    no `Math.random()`, because React can invoke an updater more than once per
+    commit. Roll outside the updater; re-check preconditions inside it.

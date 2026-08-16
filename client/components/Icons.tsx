@@ -1,32 +1,18 @@
 import React from 'react';
 import { Image } from 'react-native';
+import { gridToSvgUri } from '../utils/pixelSvg';
 
 /**
  * Pixel-art icons for the café currencies and popularity.
  *
  * Each icon is a small grid of colour keys rendered into an SVG data-URI at
  * module load time. `shape-rendering="crispEdges"` keeps the pixel look sharp
- * at any display size.
+ * at any display size. The grid-to-SVG conversion lives in utils/pixelSvg so
+ * the cat sprites can render through the same path.
  */
 
 type Grid = string[];
 type Palette = Record<string, string>;
-
-function gridToSvgUri(grid: Grid, palette: Palette): string {
-  const rows = grid.length;
-  const cols = Math.max(...grid.map((r) => r.length));
-  let rects = '';
-  for (let y = 0; y < rows; y++) {
-    for (let x = 0; x < grid[y].length; x++) {
-      const ch = grid[y][x];
-      if (ch !== '.' && palette[ch]) {
-        rects += `<rect x="${x}" y="${y}" width="1" height="1" fill="${palette[ch]}"/>`;
-      }
-    }
-  }
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${cols} ${rows}" shape-rendering="crispEdges">${rects}</svg>`;
-  return `data:image/svg+xml,${encodeURIComponent(svg)}`;
-}
 
 // ── Coin ──────────────────────────────────────────────────────────────
 // A round gold coin with a top-left highlight and bottom-right shadow.
