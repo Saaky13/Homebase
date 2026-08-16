@@ -54,6 +54,8 @@ export default function GuideOverlay() {
   useEffect(() => {
     if (isLoading || needsName || activeBeatId) return;
     if (state.focusSessionActive) return;
+    // An adoption reveal owns the screen while it's up.
+    if (state.revealActive) return;
     if (state.guide.snoozedUntil && Date.now() < state.guide.snoozedUntil) return;
     if (Date.now() - state.guide.lastShownAt < MIN_GAP_MS) return;
 
@@ -68,7 +70,10 @@ export default function GuideOverlay() {
     [activeBeatId]
   );
 
-  const visible = needsName || !!activeBeat;
+  // An adoption reveal takes the whole screen. Refusing new beats isn't enough
+  // — a beat already on screen would otherwise sit on top of it, since this
+  // overlay is a sibling of the navigator and outranks anything inside it.
+  const visible = (needsName || !!activeBeat) && !state.revealActive;
 
   useEffect(() => {
     Animated.parallel([

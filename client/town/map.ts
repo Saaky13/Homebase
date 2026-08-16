@@ -64,6 +64,10 @@ export const BUILDINGS: BuildingSpec[] = [
   { id: 'cafe', tx: 4, ty: 27, tw: 5, th: 5, color: 'a', roof: 'gable', win: 'lg', door: 'std', sign: true, awning: true, label: 'Café', route: '/cafe' },
   { id: 'house-4', tx: 11, ty: 25, tw: 4, th: 4, color: 'c', roof: 'peak', win: 'big', door: 'mid' },
   { id: 'market', tx: 17, ty: 28, tw: 5, th: 4, color: 'b', roof: 'flat', win: 'lg', door: 'std', awning: true, label: 'Market', route: '/shop' },
+  // Sited with the café and market rather than on one of the southern empty
+  // plots — the shelter is somewhere you visit often, and those plots are a
+  // long scroll from everything else.
+  { id: 'shelter', tx: 17, ty: 34, tw: 5, th: 4, color: 'd', roof: 'gable', win: 'arch', door: 'arch', sign: true, awning: true, label: 'Cat Shelter', route: '/cats' },
   { id: 'inn', tx: 27, ty: 23, tw: 5, th: 5, color: 'h', roof: 'mansard', win: 'big', door: 'mid', chimney: true, label: 'Inn' },
   { id: 'house-5', tx: 33, ty: 20, tw: 4, th: 4, color: 'b', roof: 'hip', win: 'big', door: 'mid' },
   { id: 'observatory', tx: 39, ty: 25, tw: 4, th: 5, color: 'f', roof: 'peak', win: 'arch', door: 'mid', label: 'Observatory' },
@@ -190,17 +194,6 @@ export function buildTownGrid(): Tile[][] {
   return grid;
 }
 
-/**
- * The cats that wander town before anything has been unlocked. Fixed
- * positions and facings used to live here; a roaming behaviour picks both at
- * runtime now, so all this needs to carry is who shows up. Unlocking cats
- * appends to this list rather than replacing it — see TownMap.
- */
-export const STARTER_TOWN_CATS: string[] = [
-  'mochi',
-  'pistachio',
-  'indigo',
-  'clover',
-  'sunbeam',
-  'koi',
-];
+// Who wanders the town is no longer a fixed list — it's whatever you've
+// adopted from the shelter. The starting three live in constants/gacha.ts
+// alongside the rest of the collection rules.

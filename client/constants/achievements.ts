@@ -10,10 +10,14 @@
  * lives in `state.claimedAchievements`.
  */
 
+import { SHOP_ITEMS } from './cafeData';
+import { STARTER_CATS, TOTAL_CATS } from './gacha';
+
 export type AchievementCategory =
   | 'habits'
   | 'focus'
   | 'cafe'
+  | 'cats'
   | 'economy'
   | 'streaks';
 
@@ -51,7 +55,9 @@ export interface AchievementCheckState {
   missionSet: boolean;
   totalReflections: number;      // days where reflection was completed
   totalMissionCheckIns: number;  // days where mission was checked in
-  shopItemsOwned: number;
+  shopItemsOwned: number;        // owned items that are still sold in the Market
+  catsOwned: number;             // size of the shelter collection, starters included
+  legendaryCatsOwned: number;    // legendary + ultra, the two rarities worth bragging about
 }
 
 const ACHIEVEMENTS: AchievementDef[] = [
@@ -287,7 +293,49 @@ const ACHIEVEMENTS: AchievementDef[] = [
     emoji: '🎀',
     category: 'economy',
     pearlReward: 100,
-    check: (s) => s.shopItemsOwned >= 10,
+    // Counted off the live catalogue rather than a literal — the Market lost
+    // its three cats to the Cat Shelter, and a hardcoded 10 would have left
+    // this achievement permanently out of reach.
+    check: (s) => s.shopItemsOwned >= SHOP_ITEMS.length,
+  },
+
+  // ── Shelter ──────────────────────────────────────────────
+  {
+    id: 'cats-first-adoption',
+    title: 'One More Mouth',
+    description: 'Adopt your first cat from the shelter',
+    emoji: '🐾',
+    category: 'cats',
+    pearlReward: 15,
+    // The three starters arrive for free, so the first *adoption* is the fourth cat.
+    check: (s) => s.catsOwned > STARTER_CATS.length,
+  },
+  {
+    id: 'cats-ten',
+    title: 'A Proper Clowder',
+    description: 'Have 10 cats in your collection',
+    emoji: '🐱',
+    category: 'cats',
+    pearlReward: 30,
+    check: (s) => s.catsOwned >= 10,
+  },
+  {
+    id: 'cats-legendary',
+    title: 'Rare Company',
+    description: 'Adopt a legendary or ultra cat',
+    emoji: '👑',
+    category: 'cats',
+    pearlReward: 60,
+    check: (s) => s.legendaryCatsOwned >= 1,
+  },
+  {
+    id: 'cats-all',
+    title: 'Every Cat A Home',
+    description: `Adopt all ${TOTAL_CATS} cats`,
+    emoji: '🏠',
+    category: 'cats',
+    pearlReward: 150,
+    check: (s) => s.catsOwned >= TOTAL_CATS,
   },
 ];
 
@@ -308,6 +356,7 @@ export const ACHIEVEMENT_CATEGORIES: AchievementCategoryDef[] = [
   { id: 'streaks', label: 'Streaks', emoji: '🔥', tint: '#FFDDBF', edge: '#E8B38E', ink: '#8A5A33' },
   { id: 'focus', label: 'Focus', emoji: '⏱', tint: '#CFEAFF', edge: '#8FC2E1', ink: '#38617D' },
   { id: 'cafe', label: 'Café', emoji: '☕', tint: '#FFD7EA', edge: '#E7A9C8', ink: '#8A4A67' },
+  { id: 'cats', label: 'Cats', emoji: '🐾', tint: '#DDD2FF', edge: '#B8A5EF', ink: '#4C3A7A' },
   { id: 'economy', label: 'Economy', emoji: '🪙', tint: '#FFF0BE', edge: '#E4C983', ink: '#7A6230' },
 ];
 

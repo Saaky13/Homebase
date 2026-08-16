@@ -13,7 +13,8 @@ import {
 import { useRouter } from 'expo-router';
 import { useCafeState } from '../../hooks/useCafeState';
 import { colors } from '../../constants/colors';
-import { getReflectionPromptForDate } from '../../constants/cafeData';
+import { getReflectionPromptForDate, SHOP_ITEMS } from '../../constants/cafeData';
+import { getCat } from '../../constants/catSprites';
 import FocusSection from '../../components/FocusSection';
 import { getDateKey } from '../../utils/date';
 import {
@@ -28,6 +29,8 @@ import ACHIEVEMENTS, {
   AchievementCheckState,
   CATEGORY_BY_ID,
 } from '../../constants/achievements';
+
+const SHOP_ITEM_IDS = new Set(SHOP_ITEMS.map((item) => item.id));
 
 type HubSection =
   | 'hub'
@@ -800,7 +803,15 @@ export default function HabitsTab() {
       missionSet: !!state.mission.trim(),
       totalReflections,
       totalMissionCheckIns,
-      shopItemsOwned: state.unlockedItems.length,
+      // Filtered against the live catalogue: old saves still carry the retired
+      // `cat-*` Market items, and counting those would hand out "Collector"
+      // for a set the Market no longer sells.
+      shopItemsOwned: state.unlockedItems.filter((id) => SHOP_ITEM_IDS.has(id)).length,
+      catsOwned: state.ownedCats.length,
+      legendaryCatsOwned: state.ownedCats.filter((id) => {
+        const rarity = getCat(id)?.rarity;
+        return rarity === 'legendary' || rarity === 'ultra';
+      }).length,
     };
   }, [state, getHabitStreak]);
 

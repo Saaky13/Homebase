@@ -6,15 +6,7 @@ import {
   Pressable,
   type LayoutChangeEvent,
 } from 'react-native';
-import { Asset } from 'expo-asset';
-import {
-  Canvas,
-  Group,
-  Picture,
-  Skia,
-  useImage,
-  type SkImage,
-} from '@shopify/react-native-skia';
+import { Canvas, Group, Picture, Skia } from '@shopify/react-native-skia';
 import { useSharedValue } from 'react-native-reanimated';
 import { colors } from '../constants/colors';
 import { useCafeState } from '../hooks/useCafeState';
@@ -48,56 +40,16 @@ type Table = {
 const DESIGN_WIDTH = 390;
 const DESIGN_HEIGHT = 844;
 
-/**
- * Skia's useImage wants a URI. A bare require() is a numeric module id on
- * native but an object on web, which useImage can't consume — it silently
- * requested "/undefined" for every sprite. expo-asset normalises both
- * platforms to a real URI (react-native-web has no resolveAssetSource).
- */
-const spriteUri = (mod: number) => Asset.fromModule(mod).uri;
-
-const CAT_SPRITE_URIS = {
-  front: spriteUri(require('../assets/cats/cat_front.png')),
-  back: spriteUri(require('../assets/cats/cat_back.png')),
-  left: spriteUri(require('../assets/cats/cat_left.png')),
-  right: spriteUri(require('../assets/cats/cat_right.png')),
-  front_left: spriteUri(require('../assets/cats/cat_front_left.png')),
-  front_right: spriteUri(require('../assets/cats/cat_front_right.png')),
-  back_left: spriteUri(require('../assets/cats/cat_back_left.png')),
-  back_right: spriteUri(require('../assets/cats/cat_back_right.png')),
-};
-
 export default function CafeCanvas() {
   const catsRef = useRef<Cat[]>([]);
   const animationFrameRef = useRef<number | null>(null);
   const autoSpawnTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const catSpritesRef = useRef<Record<string, SkImage | null>>({});
+  // Mirrored into a ref so spawning tracks the collection without re-running
+  // the main effect, which would tear down the canvas and the render loop.
+  const ownedCatsRef = useRef<string[]>([]);
   const pearlsRef = useRef(0);
   const popularityRef = useRef(0);
   const spawnGroupRef = useRef<() => void>(() => {});
-
-  // Skia decodes bundled assets off the JS thread; each is null until ready.
-  const catFront = useImage(CAT_SPRITE_URIS.front);
-  const catBack = useImage(CAT_SPRITE_URIS.back);
-  const catLeft = useImage(CAT_SPRITE_URIS.left);
-  const catRight = useImage(CAT_SPRITE_URIS.right);
-  const catFrontLeft = useImage(CAT_SPRITE_URIS.front_left);
-  const catFrontRight = useImage(CAT_SPRITE_URIS.front_right);
-  const catBackLeft = useImage(CAT_SPRITE_URIS.back_left);
-  const catBackRight = useImage(CAT_SPRITE_URIS.back_right);
-
-  useEffect(() => {
-    catSpritesRef.current = {
-      front: catFront,
-      back: catBack,
-      left: catLeft,
-      right: catRight,
-      front_left: catFrontLeft,
-      front_right: catFrontRight,
-      back_left: catBackLeft,
-      back_right: catBackRight,
-    };
-  }, [catFront, catBack, catLeft, catRight, catFrontLeft, catFrontRight, catBackLeft, catBackRight]);
 
   // The frame is published as a SharedValue so Skia repaints without a React
   // re-render on each of the 60 frames per second.
@@ -111,6 +63,10 @@ export default function CafeCanvas() {
   useEffect(() => {
     pearlsRef.current = state.pearls;
   }, [state.pearls]);
+
+  useEffect(() => {
+    ownedCatsRef.current = state.ownedCats;
+  }, [state.ownedCats]);
 
   // Held in a ref so spawn pacing tracks popularity without re-running the
   // main effect, which would tear down the canvas listeners and render loop.
@@ -298,6 +254,10 @@ export default function CafeCanvas() {
       const actualGroupSize = Math.min(requestedGroupSize, availableQueueSlots);
       if (actualGroupSize <= 0) return;
 
+      // Never empty in practice — the collection is seeded with three starters
+      // — but with nobody adopted there is simply nobody to visit.
+      if (ownedCatsRef.current.length === 0) return;
+
       const groupId = `group-${Date.now()}-${Math.random()}`;
       const offsets =
         actualGroupSize === 1 ? [0] : actualGroupSize === 2 ? [-22, 22] : [-28, 0, 28];
@@ -306,9 +266,15 @@ export default function CafeCanvas() {
         const queueSpot = queueSpots[queueCats.length + i];
         if (!queueSpot) break;
 
+        // Visitors are drawn from the cats you've actually adopted, so the
+        // café fills up with your own collection rather than stock sprites.
+        const roster = ownedCatsRef.current;
+        const catId = roster[Math.floor(Math.random() * roster.length)];
+
         catsRef.current.push(
           createCat(
             `${groupId}-cat-${i}`,
+            catId,
             groupId,
             width / 2,
             height - 72,
@@ -368,7 +334,7 @@ export default function CafeCanvas() {
 
       drawSeatingAreas(ctx, state.visuals.tableStyle);
 
-      catsRef.current.forEach((cat) => drawCat(ctx, cat, catSpritesRef.current));
+      catsRef.current.forEach((cat) => drawCat(ctx, cat));
 
       picture.value = recorder.finishRecordingAsPicture();
 

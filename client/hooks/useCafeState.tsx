@@ -23,6 +23,13 @@ import {
   popularityForRep,
   POPULARITY_GAINS,
 } from '../constants/popularity';
+import {
+  pickCat,
+  seedOwnedCats,
+  PULL_COST_COINS,
+  STARTER_CATS,
+} from '../constants/gacha';
+import type { CatSpec } from '../constants/catSprites';
 
 export interface QueueCat {
   id: number;
@@ -156,7 +163,24 @@ export interface CafeState {
   focusTimer: FocusTimer;
   /** Achievement ids the user has claimed their pearl reward for. */
   claimedAchievements: string[];
+  /**
+   * Cat ids adopted from the shelter. This is the whole collection — cats not
+   * in here exist nowhere in the app, neither roaming town nor visiting the
+   * café.
+   */
+  ownedCats: string[];
+  // true while an adoption reveal is on screen, so the guide overlay stays out
+  // of the way. Never persisted across restarts, same as focusSessionActive.
+  revealActive: boolean;
 }
+
+/**
+ * The outcome of an adoption attempt. A failure says why so the shelter can
+ * show the right thing — you can't afford it, or there's nobody left to adopt.
+ */
+export type AdoptResult =
+  | { ok: true; cat: CatSpec }
+  | { ok: false; reason: 'coins' | 'complete' };
 
 const STORAGE_KEY = '@focus_cafe_state_v2';
 
@@ -233,6 +257,8 @@ const initialState: CafeState = {
   focusSessionActive: false,
   focusTimer: idleFocusTimer(),
   claimedAchievements: [],
+  ownedCats: [...STARTER_CATS],
+  revealActive: false,
 };
 
 /**
@@ -435,6 +461,8 @@ type CafeContextType = {
   muteGuideMessage: (id: string) => void;
   setFocusSessionActive: (active: boolean) => void;
   claimAchievement: (achievementId: string, pearlReward: number) => boolean;
+  adoptCat: () => AdoptResult;
+  setRevealActive: (active: boolean) => void;
 };
 
 const CafeContext = createContext<CafeContextType | null>(null);
@@ -447,6 +475,26 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
     number | null
   >(null);
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  /** Writes stay off until the stored save has been read and applied. */
+  const hasLoadedRef = useRef(false);
+
+  /**
+   * A mirror of the committed state, for actions that must decide something
+   * and report it back to the caller in the same tick.
+   *
+   * Most actions here assign their outcome to a local inside the setState
+   * updater and return it. That only works because React eagerly runs an
+   * updater when the fiber has no other pending update — when one is already
+   * queued it defers the updater to render time, and the action returns its
+   * default instead of the real outcome. Reading the mirror keeps a decision
+   * independent of when React chooses to run the updater.
+   */
+  const stateRef = useRef(state);
+
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
 
   useEffect(() => {
     const loadState = async () => {
@@ -493,8 +541,15 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
             habitLogs: migrateHabitLogs(parsed.habitLogs),
             dailyStats: parsed.dailyStats ?? {},
             todos: Array.isArray(parsed.todos) ? parsed.todos : [],
+            // Saves from before the shelter existed have no collection. Seed
+            // one from the starters plus whatever cats they'd bought in the
+            // Market back when it sold them, so nobody's town loses a cat.
+            ownedCats: Array.isArray(parsed.ownedCats)
+              ? parsed.ownedCats
+              : seedOwnedCats(parsed.unlockedItems ?? []),
             // never resume a "session in progress" flag across app restarts
             focusSessionActive: false,
+            revealActive: false,
           };
         }
 
@@ -529,6 +584,9 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
       } catch (error) {
         console.error('Failed to load state:', error);
       } finally {
+        // Only now is it safe to persist: anything committed before this point
+        // was working against initialState.
+        hasLoadedRef.current = true;
         setIsLoading(false);
       }
     };
@@ -548,16 +606,28 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
     }, 250);
   }, []);
 
-  const commit = useCallback(
-    (updater: (prev: CafeState) => CafeState) => {
-      setState((prev) => {
-        const next = updater(prev);
-        saveState(next);
-        return next;
-      });
-    },
-    [saveState]
-  );
+  /**
+   * Persistence is driven off the committed state rather than from inside
+   * `commit`, and stays off until the initial load has landed.
+   *
+   * Saving from within the updater meant the snapshot was captured when React
+   * *processed* the queue, not when the action was called. A commit made while
+   * the load was still in flight would run against `initialState`, and its
+   * write would land after the load had already restored the real save —
+   * quietly wiping it. Reacting to `state` means a write always reflects what
+   * was actually committed, and the guard drops the pre-load writes whose
+   * contents the load is about to discard anyway.
+   */
+  useEffect(() => {
+    if (!hasLoadedRef.current) return;
+    saveState(state);
+  }, [state, saveState]);
+
+  // Persisting is handled by the effect above, so this is purely a state
+  // transition — no side effects inside the updater.
+  const commit = useCallback((updater: (prev: CafeState) => CafeState) => {
+    setState(updater);
+  }, []);
 
   const updateState = useCallback(
     (updates: Partial<CafeState>) => {
@@ -1319,6 +1389,53 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
     [commit]
   );
 
+  const setRevealActive = useCallback(
+    (active: boolean) => {
+      commit((prev) => ({ ...prev, revealActive: active }));
+    },
+    [commit]
+  );
+
+  const adoptCat = useCallback((): AdoptResult => {
+    // The draw is decided here, against the mirror, rather than inside the
+    // updater. The caller is waiting on this result to play a reveal, so it
+    // can't depend on whether React ran the updater eagerly or deferred it —
+    // a deferred updater would report "you can't afford this" for an adoption
+    // that actually went through, losing the cat's reveal.
+    const current = stateRef.current;
+
+    if (current.coins < PULL_COST_COINS) return { ok: false, reason: 'coins' };
+
+    const cat = pickCat(current.ownedCats, Math.random(), Math.random());
+    if (!cat) return { ok: false, reason: 'complete' };
+
+    // Advance the mirror before committing so a second tap in the same frame
+    // draws against the spend that's already in flight instead of stale coins.
+    // The effect above resyncs it from the real state on the next render.
+    stateRef.current = {
+      ...current,
+      coins: current.coins - PULL_COST_COINS,
+      ownedCats: [...current.ownedCats, cat.id],
+    };
+
+    // Spending and granting are one commit — composing spendCoins() with a
+    // separate unlock would leave a window where the coins are gone and the
+    // cat isn't in the collection yet. `prev` is the authority: the mirror can
+    // lag, so re-check against it before charging anyone.
+    commit((prev) => {
+      if (prev.coins < PULL_COST_COINS || prev.ownedCats.includes(cat.id)) {
+        return prev;
+      }
+      return {
+        ...prev,
+        coins: prev.coins - PULL_COST_COINS,
+        ownedCats: [...prev.ownedCats, cat.id],
+      };
+    });
+
+    return { ok: true, cat };
+  }, [commit]);
+
   return (
     <CafeContext.Provider
       value={{
@@ -1365,6 +1482,8 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
         muteGuideMessage,
         setFocusSessionActive,
         claimAchievement,
+        adoptCat,
+        setRevealActive,
       }}
     >
       {children}

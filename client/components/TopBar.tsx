@@ -9,6 +9,7 @@ const TITLES: Record<string, string> = {
   '/cafe': 'Café',
   '/shop': 'Market',
   '/habits': 'Growth Hub',
+  '/cats': 'Cat Shelter',
 };
 
 function Pill({

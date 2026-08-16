@@ -8,28 +8,11 @@ export const CATS_DATA = [
   { name: 'Sunny', emoji: '🌟', type: 'cat-sunny' },
 ];
 
+// The Market used to sell three cats that only ever incremented a counter.
+// Cats now come from the Cat Shelter, where they're real roster cats you
+// actually own. Existing saves migrate their purchases into the collection —
+// see seedOwnedCats in constants/gacha.ts.
 export const SHOP_ITEMS = [
-  {
-    id: 'cat-orange',
-    title: 'Orange Cat',
-    emoji: '🧡',
-    price: 50,
-    category: 'cats',
-  },
-  {
-    id: 'cat-white',
-    title: 'White Cat',
-    emoji: '⚪',
-    price: 50,
-    category: 'cats',
-  },
-  {
-    id: 'cat-green',
-    title: 'Green Cat',
-    emoji: '💚',
-    price: 50,
-    category: 'cats',
-  },
   {
     id: 'flavor-mango',
     title: 'Mango Boba',
