@@ -1,120 +1,62 @@
-import React from 'react';
-import { Image } from 'react-native';
-import { gridToSvgUri } from '../utils/pixelSvg';
+import React, { useMemo } from 'react';
+import Svg, { Rect } from 'react-native-svg';
+
+import { gridCols, COIN, type IconSpec, PEARL, STAR } from './iconGrids';
 
 /**
- * Pixel-art icons for the café currencies and popularity.
+ * Currency and popularity icons, drawn from the pixel grids in iconGrids.ts.
  *
- * Each icon is a small grid of colour keys rendered into an SVG data-URI at
- * module load time. `shape-rendering="crispEdges"` keeps the pixel look sharp
- * at any display size. The grid-to-SVG conversion lives in utils/pixelSvg so
- * the cat sprites can render through the same path.
+ * One path for every platform. The obvious alternative — an SVG data-URI in an
+ * <Image> — renders nothing on iOS or Android, because React Native's <Image>
+ * decodes PNG/JPEG/GIF/WebP but not SVG; that only ever worked on web, where
+ * <Image> becomes a browser <img>.
+ *
+ * Skia would draw these too, but each <Canvas> is a GPU-backed surface and the
+ * top bar keeps three icons mounted on every screen. Skia is worth that for
+ * the town and the café, which redraw every frame; static chrome is not.
  */
 
-type Grid = string[];
-type Palette = Record<string, string>;
+function PixelIcon({ spec, size }: { spec: IconSpec; size: number }) {
+  const { grid, palette, label } = spec;
+  const cols = gridCols(grid);
 
-// ── Coin ──────────────────────────────────────────────────────────────
-// A round gold coin with a top-left highlight and bottom-right shadow.
+  const cells = useMemo(() => {
+    const out: React.ReactElement[] = [];
+    for (let y = 0; y < grid.length; y++) {
+      for (let x = 0; x < grid[y].length; x++) {
+        const ch = grid[y][x];
+        const color = ch === '.' ? undefined : palette[ch];
+        if (!color) continue;
+        // width/height 1.02 rather than 1: neighbouring cells otherwise leave
+        // hairline seams when the viewBox is scaled to a fractional size.
+        out.push(
+          <Rect key={`${x}-${y}`} x={x} y={y} width={1.02} height={1.02} fill={color} />
+        );
+      }
+    }
+    return out;
+  }, [grid, palette]);
 
-const COIN_GRID: Grid = [
-  '...OOOO...',
-  '..OggggO..',
-  '.OgHHgggO.',
-  'OgHHgggggO',
-  'OgHggggggO',
-  'OgggggggSO',
-  'OggggggSSO',
-  '.OggggSSO.',
-  '..OggggO..',
-  '...OOOO...',
-];
-
-const COIN_PALETTE: Palette = {
-  O: '#B8882D',   // dark gold outline
-  g: '#F5D273',   // gold fill
-  H: '#FFF5D6',   // highlight
-  S: '#C49A3A',   // shadow
-};
-
-// ── Pearl ─────────────────────────────────────────────────────────────
-// A lustrous purple pearl with a white sparkle.
-
-const PEARL_GRID: Grid = [
-  '...OOOO...',
-  '..OppppO..',
-  '.OpHHpppO.',
-  'OpHWHppppO',
-  'OpHHpppppO',
-  'OpppppppsO',
-  'OppppppssO',
-  '.OppppssO.',
-  '..OppppO..',
-  '...OOOO...',
-];
-
-const PEARL_PALETTE: Palette = {
-  O: '#9B6BAD',   // dark purple outline
-  p: '#E0B8E8',   // lavender fill
-  H: '#F0E0F6',   // light highlight
-  W: '#FFFFFF',   // sparkle
-  s: '#C89DD0',   // shadow
-};
-
-// ── Popularity star ───────────────────────────────────────────────────
-// A five-pointed star in warm coral. Highlight at the tip for shine.
-
-const STAR_GRID: Grid = [
-  '....O....',
-  '...OHO...',
-  '..OOHOO..',
-  'OFFFFFFFO',
-  '.OFFFFFO.',
-  '..OFFFO..',
-  '..OF.FO..',
-  '.OF...FO.',
-  'OO.....OO',
-];
-
-const STAR_PALETTE: Palette = {
-  O: '#C45E5E',   // dark coral outline
-  F: '#E88973',   // coral fill
-  H: '#FFB5A0',   // highlight
-};
-
-// Pre-compute the URIs once at module load
-const COIN_URI = gridToSvgUri(COIN_GRID, COIN_PALETTE);
-const PEARL_URI = gridToSvgUri(PEARL_GRID, PEARL_PALETTE);
-const STAR_URI = gridToSvgUri(STAR_GRID, STAR_PALETTE);
-
-// ── Exported components ───────────────────────────────────────────────
+  return (
+    <Svg
+      width={size}
+      height={size}
+      viewBox={`0 0 ${cols} ${grid.length}`}
+      accessibilityLabel={label}
+    >
+      {cells}
+    </Svg>
+  );
+}
 
 export function CoinIcon({ size = 14 }: { size?: number }) {
-  return (
-    <Image
-      source={{ uri: COIN_URI }}
-      style={{ width: size, height: size }}
-      accessibilityLabel="coin"
-    />
-  );
+  return <PixelIcon spec={COIN} size={size} />;
 }
 
 export function PearlIcon({ size = 14 }: { size?: number }) {
-  return (
-    <Image
-      source={{ uri: PEARL_URI }}
-      style={{ width: size, height: size }}
-      accessibilityLabel="pearl"
-    />
-  );
+  return <PixelIcon spec={PEARL} size={size} />;
 }
 
 export function PopularityIcon({ size = 14 }: { size?: number }) {
-  return (
-    <Image
-      source={{ uri: STAR_URI }}
-      style={{ width: size, height: size }}
-      accessibilityLabel="popularity"
-    />
-  );
+  return <PixelIcon spec={STAR} size={size} />;
 }
