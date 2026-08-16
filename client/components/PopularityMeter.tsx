@@ -7,6 +7,7 @@ import {
   displayPopularity,
   MAX_CAFE_MULTIPLIER,
 } from '../constants/popularity';
+import { PopularityIcon } from './Icons';
 
 /**
  * The café's live standing, shown next to the queue it drives.
@@ -31,7 +32,10 @@ export default function PopularityMeter() {
   return (
     <View style={styles.container}>
       <View style={styles.headerRow}>
-        <Text style={styles.label}>Popularity</Text>
+        <View style={styles.labelRow}>
+          <PopularityIcon size={13} />
+          <Text style={styles.label}>Popularity</Text>
+        </View>
 
         <View style={styles.valueRow}>
           {lost !== null && (
@@ -82,6 +86,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     marginBottom: 6,
+  },
+  labelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
   },
   label: {
     fontSize: 10,
