@@ -10,22 +10,30 @@
 
 ```bash
 cd client
-npm install          # if fresh clone
-npm run web -- --port 8090
+npm install                      # if fresh clone
+
+npx expo start --port 8099       # device: open the exp:// URL in Expo Go
+npm run web -- --port 8090       # browser
 ```
 
-The dev server preview is configured in `.claude/launch.json` under the name
+The web preview is configured in `.claude/launch.json` under the name
 `cat-cafe-web` on port 8090. Use that to launch in the Browser pane.
 
-Platform: **web is the verified target.** The app runs via Expo on
-`react-native-web`. A native path exists — `app.json` carries iOS/Android
-config (`com.saaky13.homebase`, new architecture on), the café renders through
-Skia which is linked into a native binary, and `CafeCanvasHost.native.tsx`
-skips the web-only CanvasKit loader — but **no native build has been run or
-verified end to end.** Treat native as wired, not working.
+**The shipping target is iOS and Android.** The browser is a dev convenience,
+not a release surface — it is faster to iterate in, but it is not what the app
+has to look right on. Verify anything visual on a device.
 
-`npm install` runs a `postinstall` hook (`scripts/copy-canvaskit.js`) that
-stages the CanvasKit WASM payload for web. A fresh clone that skips postinstall
+The device path is Expo Go over Metro in native mode (`npx expo start`, no
+`--web`). `exp://` URLs are not web addresses; they open in Expo Go, which
+needs the phone on the same network as the Mac. `--tunnel` routes around the
+LAN when that fails, and needs `@expo/ngrok` installed.
+
+No native build has been produced yet — Skia and the rest run inside Expo Go,
+which bundles them. A custom dev client or EAS build is only needed once a
+native module ships that Expo Go doesn't already carry.
+
+On web, `npm install` runs a `postinstall` hook (`scripts/copy-canvaskit.js`)
+that stages the CanvasKit WASM payload. A fresh clone that skips postinstall
 will fail on the café screen.
 
 ---
@@ -36,7 +44,9 @@ will fail on the café screen.
 |---|---|
 | Framework | React Native (Expo 54) with expo-router 6 |
 | Language | TypeScript 5.9, React 19.1 |
-| Rendering | Skia via `@shopify/react-native-skia` for the café floor (authored 390 wide, uniformly scaled, height flows — through the Canvas2D-shaped shim in `components/skiaCanvas2d.ts`); HTML5 Canvas for the town map (384×736); cat sprites 28×37 |
+| Rendering | Skia for the café floor on every platform (authored 390 wide, uniformly scaled, height flows — through the Canvas2D-shaped shim in `components/skiaCanvas2d.ts`); the town map paints to `<canvas>` on web and Skia on device (384×736); cat sprites 28×37 |
+| Vector icons | `react-native-svg` (currency + popularity pixel icons) |
+| Safe areas | `react-native-safe-area-context` |
 | State | React Context + AsyncStorage (`@focus_cafe_state_v2` key) |
 | Styling | React Native `StyleSheet` — no CSS-in-JS libs, no Tailwind |
 | Animation | `requestAnimationFrame` game loop (café), `Animated` API (UI) |
@@ -59,31 +69,32 @@ cat cafe/
     │   ├── _layout.tsx      # root layout (CafeProvider, TopBar, GuideOverlay, Stack)
     │   ├── index.tsx        # TownScreen — the home screen (pixel-art town map)
     │   ├── cafe/index.tsx   # CafeTab — Skia café floor with cats, queue, serve button
-    │   ├── habits/index.tsx # HabitsTab — the "Growth Hub" (~2130 lines, all 8 sections + hub grid)
+    │   ├── habits/index.tsx # HabitsTab — the "Growth Hub" (~2148 lines, all 8 sections + hub grid)
     │   ├── shop/index.tsx   # ShopTab — coin-based shop (flavors, decor, upgrades)
     │   ├── cats/index.tsx   # CatsTab — the Cat Shelter (Adopt + Collection tabs)
     │   └── habit-form.tsx   # modal form for creating/editing habits
     │
     ├── components/
-    │   ├── CafeCanvas.tsx   # Skia game loop — cat spawning, queuing, seating, serving
-    │   ├── CafeCanvasHost.tsx        # web entry — defers CafeCanvas until CanvasKit loads
-    │   ├── CafeCanvasHost.native.tsx # native entry — re-exports CafeCanvas directly
-    │   ├── skiaCanvas2d.ts  # Canvas2D-shaped facade over Skia's imperative canvas
+    │   ├── CafeCanvas.tsx   # Café game loop — cat spawning, queuing, seating, serving
+    │   ├── CafeCanvasHost.tsx / .native.tsx  # Platform entry: CanvasKit gate (web) vs direct (native)
+    │   ├── skiaCanvas2d.ts  # Canvas2D-shaped facade over Skia — lets the café's draw calls stay put
     │   ├── Cat.tsx          # Cat entity model — state machine, movement, drawing
     │   ├── pixelImage.ts    # Shared grid → cached SkImage rasteriser
     │   ├── catImageCache.ts # Caches each cat×direction as an SkImage
     │   ├── bobaImageCache.ts # Caches the carried cup — 3 flavours × 4 fill levels
-    │   ├── BobaCupSprite.tsx # The draggable counter cup — SVG data-URI <Image>
-    │   ├── CatSprite.tsx    # React cat sprite — SVG data-URI <Image>, no canvas
+    │   ├── BobaCupSprite.tsx # The draggable counter cup — SVG data-URI <Image>; web only
+    │   ├── CatSprite.tsx    # React cat sprite — SVG data-URI <Image>; web only
     │   ├── GachaMachine.tsx # Pixel capsule machine with animated crank + drop
     │   ├── AdoptionReveal.tsx  # Full-screen reveal after an adoption
     │   ├── CurrencyBar.tsx  # Coins + Pearls bar (unused — replaced by TopBar pills)
     │   ├── FocusSection.tsx # Focus timer UI — rendered as a Growth Hub section
-    │   ├── GuideOverlay.tsx # Animated bottom sheet — name prompt + contextual guide beats
-    │   ├── Icons.tsx        # Coin / Pearl / Popularity pixel icons as SVG data-URIs
+    │   ├── GuideOverlay.tsx # Animated bottom sheet — name prompt + guide beats; tracks the keyboard
+    │   ├── Icons.tsx        # Coin/pearl/star icons — react-native-svg, one path for all platforms
+    │   ├── iconGrids.ts     # Pixel grids + palettes behind those icons (data only)
     │   ├── PopularityMeter.tsx  # Popularity bar shown on the café screen
-    │   ├── TopBar.tsx       # Persistent top bar — brand, back button, coin/pearl/level pills
-    │   ├── TownMap.tsx      # Pixel-art town map component (canvas-rendered)
+    │   ├── TopBar.tsx       # Persistent top bar — owns the status-bar safe-area inset
+    │   ├── TownMap.tsx      # Town map — labels and tap targets over a TownSurface
+    │   ├── TownSurface.tsx / .native.tsx / .types.ts  # Town paint: <canvas> (web) vs Skia (native)
     │   ├── cafeConfig.ts    # Café layout constants — 10 table center coordinates
     │   ├── cafePixel.ts     # PixelPainter — the café's rect-only pixel-art primitives
     │   └── cafeRender.ts    # The room — floor, rug, wall, windows, counter, tables, door
@@ -111,11 +122,12 @@ cat cafe/
     │   ├── draw.ts          # Town rendering — buildings, roads, trees, cats, fountain
     │   ├── roam.ts          # Roaming cats — BFS pathing over walkable tiles
     │   ├── palette.ts       # Day/night colour palettes (night 7pm–6am, navy-tinted)
-    │   └── canvasPainter.ts # Canvas abstraction (web path; native would swap in Skia)
+    │   ├── canvasPainter.ts # Painter implementation — Canvas2D (web)
+    │   └── skiaPainter.ts   # Painter implementation — Skia (native)
     │
     ├── utils/
     │   ├── date.ts          # Date key helpers, streak computation, habit log types
-    │   └── pixelSvg.ts      # Shared grid → SVG data-URI encoder (icons, cats, machine)
+    │   └── pixelSvg.ts      # Grid → SVG data-URI encoder — WEB ONLY, see below
     │
     ├── scripts/
     │   └── copy-canvaskit.js  # postinstall — stages the CanvasKit WASM payload for web
@@ -452,6 +464,19 @@ of colour keys assembled from:
 - **React (collection, reveal)** — `components/CatSprite.tsx` renders a grid as an
   SVG data-URI `<Image>` via `utils/pixelSvg.ts`. No canvas, no Skia.
 
+> ⚠️ **`utils/pixelSvg.ts` is web-only.** React Native's `<Image>` decodes
+> PNG/JPEG/GIF/WebP — not SVG — so an SVG data-URI renders nothing on iOS or
+> Android; it only ever worked because `<Image>` becomes a browser `<img>` on
+> web. The currency icons hit this and were moved to `react-native-svg`
+> (`components/Icons.tsx` + `iconGrids.ts`), which is the pattern to copy.
+> **`CatSprite.tsx`, `GachaMachine.tsx` and `BobaCupSprite.tsx` still go through
+> `pixelSvg` and are therefore blank on device** — the Cat Shelter and the
+> pixel-art café both landed after the device port, so neither has been through
+> this yet. That means the shelter's cat grid, the capsule machine, and the
+> counter cup you drag to serve are all invisible on a phone. Porting them is
+> the same mechanical change: emit `<Rect>` elements instead of a data-URI. See
+> convention 11.
+
 The legacy PNGs in `client/assets/cats/` are no longer referenced.
 
 ---
@@ -708,7 +733,7 @@ includes `/habits` AND that `state.guideContext === 'habits:${section}'`.
 
 ## Growth Hub sections (app/habits/index.tsx)
 
-The Growth Hub is a single screen (~2130 lines) with a local `section` state:
+The Growth Hub is a single screen (~2148 lines) with a local `section` state:
 
 ```typescript
 type HubSection = 'hub' | 'habits' | 'mission' | 'reflection' | 'focus'
@@ -861,7 +886,20 @@ Key exports: `Roamer`, `walkableTiles()`, `createRoamers()`, `stepRoamers()`.
 - `draw.ts` — rendering: terrain, roads, buildings, trees, fountain, wandering cats
 - `roam.ts` — roamer state, walkable-tile graph, BFS routing, per-frame stepping
 - `palette.ts` — day/night palettes, `isNightAt()`, `nightPalette()`, `dimForNight()`
-- `canvasPainter.ts` — thin canvas abstraction (web path; native would swap in Skia)
+- `roam.ts` — roamer pathfinding, `createRoamers()`, `stepRoamers()`
+- `canvasPainter.ts` / `skiaPainter.ts` — the two `Painter` implementations
+
+**Two layers, both backends.** The streets and buildings never change, so they
+are painted once — into an offscreen canvas on web, into an `SkPicture` on
+native — and that one image is replayed each frame with only the roaming cats
+drawn on top. `components/TownSurface*` holds both paths behind one filename so
+`TownMap` carries the labels and tap targets exactly once.
+
+**Known cost:** `drawRoamers` emits one `rect` per sprite pixel per cat per
+frame — roughly 1,400 draw calls a frame at a full roster, and it grows with
+every cat unlocked. The fix is to bake each cat×direction into an image once
+(day and night variants, since `dimForNight` is currently applied per pixel)
+and blit that instead. Not done yet.
 
 ---
 
@@ -1069,12 +1107,27 @@ function computeHabitStreak(
 ## Running the app
 
 ```bash
-# Dev server (web)
-cd client && npm run web -- --port 8090
+# On a phone (the real target) — open the printed exp:// URL in Expo Go
+cd client && npx expo start --port 8099
+cd client && npx expo start --port 8099 --tunnel   # if the LAN won't cooperate
 
-# Or via the Browser pane launch config:
-# preview_start with name "cat-cafe-web"
+# In a browser
+cd client && npm run web -- --port 8090
+# Or via the Browser pane launch config: preview_start with name "cat-cafe-web"
 ```
+
+**Check a native change compiles without a phone** by asking Metro for the
+platform bundle directly:
+
+```bash
+curl -s "http://127.0.0.1:8099/.expo/.virtual-metro-entry.bundle?platform=ios&dev=true" -o /tmp/ios.js
+```
+
+A JSON body back means a build error; a large JS file means it compiled. This
+catches the native-only class of bug — an import that doesn't resolve, Metro
+picking the wrong platform variant, a web-only module reaching native code —
+none of which the browser will ever show you. It proves nothing about how the
+app *looks*; only a device does that.
 
 No tests exist yet. No linting is enforced beyond the Expo eslint config.
 
@@ -1091,6 +1144,8 @@ should generally not be committed with a session-local port.
 
 ### Built and working
 - Town map with day/night cycle, 28 buildings, cats roaming via BFS pathing
+- Runs on iOS and Android through Expo Go — town and café both paint via Skia
+- Safe-area handling (notch/home indicator) and keyboard avoidance on every screen
 - Full café floor rendered through Skia as pixel art in the town's idiom —
   plank floor, woven runner, counter with espresso machine and boba jars,
   windows onto the town, chalk menu board, day/night lighting (2 visual style
@@ -1117,8 +1172,9 @@ should generally not be committed with a session-local port.
 
 ### Not yet built
 - User XP / leveling system (separate from café level)
-- **Verified native iOS/Android builds** — the Skia path, `app.json` config, and
-  `.native.tsx` entrypoints are in place, but no build has been run end to end
+- Sprite rasterisation on the town map — the per-pixel draw loop is the app's
+  main performance debt
+- A standalone build (EAS / custom dev client); Expo Go covers everything so far
 - Sound design
 - Notifications / reminders
 - Backend / cloud sync
@@ -1143,9 +1199,9 @@ should generally not be committed with a session-local port.
 5. **The Growth Hub uses local section state, not routes.** Adding a new section
    means: add to `HubSection` type → add tile in `renderHub()` → add render
    function → add conditional in JSX return → set `guideContext` in `useEffect`.
-6. **Canvas rendering is imperative.** The café and town map draw through a 2D
-   context directly. Don't try to use React components inside them. The café's
-   context is `Ctx2D` — Skia behind a Canvas2D-shaped facade
+6. **Canvas rendering is imperative.** The café and town map paint pixels
+   directly. Don't try to use React components inside them. The café's context
+   is `Ctx2D` — Skia behind a Canvas2D-shaped facade
    (`components/skiaCanvas2d.ts`), which is deliberately **not** a general
    polyfill: it implements only what the café uses. Reaching for a 2D API the
    café doesn't already call means adding it to the shim first, or it works on
@@ -1162,19 +1218,45 @@ should generally not be committed with a session-local port.
     This survives unmounts, app restarts, and throttled intervals. Pausing stores
     `remainingSeconds`; running derives remaining from `endsAt - Date.now()`.
     Offline time is never credited — a session mid-run at close comes back paused.
-11. **Pixel art goes through `utils/pixelSvg.ts`.** Currency icons, collection
-    cat sprites, and the capsule machine all encode a grid to an SVG data-URI
-    rendered by a React Native `<Image>` — not an inline `<svg>`, which doesn't
-    exist on native. The café canvas is the exception: it needs `SkImage`s, so
-    `pixelImage.rasteriseGrid` draws a grid once into an offscreen Skia surface
-    and the caches (`catImageCache.ts`, `bobaImageCache.ts`) keep the snapshot
-    forever. A 28×37 grid is ~1,000 cells; painting that per cat per frame at
-    60fps is not viable.
-12. **Draw functions that may run inside a state updater must be pure.** The
+11. **Pixel art goes through `utils/pixelSvg.ts` — on web.** Collection cat
+    sprites, the capsule machine and the counter boba cup encode a grid to an
+    SVG data-URI rendered by a React Native `<Image>`. **This renders nothing on
+    iOS or Android** — `<Image>` decodes PNG/JPEG/GIF/WebP, not SVG; it only
+    ever worked because `<Image>` becomes a browser `<img>` on web. The currency
+    icons hit this and moved to `react-native-svg` (`Icons.tsx` + `iconGrids.ts`),
+    which is the pattern to copy. The café canvas is the other exception: it
+    needs `SkImage`s, so `pixelImage.rasteriseGrid` draws a grid once into an
+    offscreen Skia surface and the caches (`catImageCache.ts`,
+    `bobaImageCache.ts`) keep the snapshot forever. A 28×37 grid is ~1,000
+    cells; painting that per cat per frame at 60fps is not viable.
+12. **No browser APIs outside `.tsx` files that Metro resolves web-only.**
+    `document`, `window`, `HTMLCanvasElement`, `Image.resolveAssetSource` and
+    SVG-in-`<Image>` all exist on web and none of them exist on device. When a
+    component needs both, split it: `Thing.tsx` (web) and `Thing.native.tsx`
+    (native) behind one import, with the shared contract in `Thing.types.ts`.
+    `TownSurface` and `CafeCanvasHost` are the worked examples.
+13. **Skia for things that move; native views for chrome.** The town and café
+    redraw every frame and belong in Skia. Buttons, text, lists and inputs stay
+    React Native views — that is where accessibility, text input, scroll physics
+    and keyboard handling come from for free. Static icons are chrome: they use
+    `react-native-svg`, not a Skia `<Canvas>` per icon.
+14. **`TopBar` owns the top safe-area inset; scroll content owns the bottom.**
+    The bar renders outside the `Stack`, so it is above every screen and pads
+    for the notch itself. Screens add `insets.bottom` to a ScrollView's
+    `contentContainerStyle` rather than clipping the container, so the last card
+    can still be scrolled clear of the home indicator. Don't use React Native's
+    built-in `SafeAreaView` — it is deprecated and top-only.
+15. **Any screen with a `TextInput` needs keyboard handling.** Wrap it in a
+    `KeyboardAvoidingView` (`behavior="padding"` on iOS) and set
+    `keyboardShouldPersistTaps="handled"` so the first tap hits the button
+    instead of only dismissing the keyboard. Absolutely-positioned surfaces
+    can't be lifted that way and must track keyboard height themselves —
+    `GuideOverlay` is the worked example.
+16. **Draw functions that may run inside a state updater must be pure.** The
     adoption draw (`constants/gacha.ts`) takes its rolls as parameters and calls
     no `Math.random()`, because React can invoke an updater more than once per
     commit. Roll outside the updater; re-check preconditions inside it.
-13. **Never hand `drawImage` the fill paint.** Skia ignores a paint's RGB when
+17. **Never hand `drawImage` the fill paint.** Skia ignores a paint's RGB when
     drawing an image but still applies its **alpha**, so sharing `fillPaint`
     painted every sprite at whatever opacity the last `fillStyle` happened to
     carry — a 22% contact shadow set just before a cat left the cat 22% opaque.
