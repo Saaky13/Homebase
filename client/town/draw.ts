@@ -2,9 +2,9 @@
  * Draws the town.
  *
  * Every mark on this map is a filled axis-aligned rectangle — no paths, no
- * curves, no images. That is deliberate: it means porting to Skia is one
- * implementation of `Painter`, not a rewrite. Canvas2D lives in
- * `canvasPainter.ts`; a Skia painter would be about thirty lines beside it.
+ * curves, no images. That is deliberate: it made porting to Skia one more
+ * implementation of `Painter` rather than a rewrite. Canvas2D lives in
+ * `canvasPainter.ts` and Skia in `skiaPainter.ts`; both are under thirty lines.
  */
 
 import {
