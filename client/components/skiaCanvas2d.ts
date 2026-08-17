@@ -25,6 +25,7 @@ export class SkiaCanvas2D {
   private path: SkPath;
   private fillPaint: SkPaint;
   private strokePaint: SkPaint;
+  private imagePaint: SkPaint;
 
   fillStyle = '#000000';
   strokeStyle = '#000000';
@@ -41,6 +42,13 @@ export class SkiaCanvas2D {
     this.strokePaint = Skia.Paint();
     this.strokePaint.setAntiAlias(true);
     this.strokePaint.setStyle(PaintStyle.Stroke);
+
+    // Images get their own paint. Skia ignores a paint's RGB when drawing an
+    // image but still applies its *alpha*, so sharing the fill paint meant a
+    // sprite came out at whatever opacity the last fillStyle happened to have —
+    // a 22% shadow before a cat left the cat drawn at 22%.
+    this.imagePaint = Skia.Paint();
+    this.imagePaint.setAntiAlias(false);
   }
 
   // Paints are reused across draws rather than allocated per call, since this
@@ -173,7 +181,7 @@ export class SkiaCanvas2D {
       image,
       Skia.XYWHRect(0, 0, image.width(), image.height()),
       Skia.XYWHRect(dx, dy, dWidth, dHeight),
-      this.fillPaint
+      this.imagePaint
     );
   }
 }
