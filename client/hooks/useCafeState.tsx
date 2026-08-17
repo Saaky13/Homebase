@@ -24,9 +24,9 @@ import {
   POPULARITY_GAINS,
 } from '../constants/popularity';
 import {
+  adoptionCost,
   pickCat,
   seedOwnedCats,
-  PULL_COST_COINS,
   STARTER_CATS,
 } from '../constants/gacha';
 import type { CatSpec } from '../constants/catSprites';
@@ -1404,7 +1404,8 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
     // that actually went through, losing the cat's reveal.
     const current = stateRef.current;
 
-    if (current.coins < PULL_COST_COINS) return { ok: false, reason: 'coins' };
+    const cost = adoptionCost(current.ownedCats.length);
+    if (current.coins < cost) return { ok: false, reason: 'coins' };
 
     const cat = pickCat(current.ownedCats, Math.random(), Math.random());
     if (!cat) return { ok: false, reason: 'complete' };
@@ -1414,7 +1415,7 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
     // The effect above resyncs it from the real state on the next render.
     stateRef.current = {
       ...current,
-      coins: current.coins - PULL_COST_COINS,
+      coins: current.coins - cost,
       ownedCats: [...current.ownedCats, cat.id],
     };
 
@@ -1423,12 +1424,16 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
     // cat isn't in the collection yet. `prev` is the authority: the mirror can
     // lag, so re-check against it before charging anyone.
     commit((prev) => {
-      if (prev.coins < PULL_COST_COINS || prev.ownedCats.includes(cat.id)) {
+      // Priced off `prev`, not the `cost` computed above: the mirror can lag,
+      // and now that the price climbs with the collection, charging a stale
+      // one would undercharge for an adoption that landed after another.
+      const prevCost = adoptionCost(prev.ownedCats.length);
+      if (prev.coins < prevCost || prev.ownedCats.includes(cat.id)) {
         return prev;
       }
       return {
         ...prev,
-        coins: prev.coins - PULL_COST_COINS,
+        coins: prev.coins - prevCost,
         ownedCats: [...prev.ownedCats, cat.id],
       };
     });

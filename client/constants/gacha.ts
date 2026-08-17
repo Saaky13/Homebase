@@ -15,9 +15,42 @@ import {
  * a single commit. See `adoptCat` in useCafeState.
  */
 
-export const PULL_COST_COINS = 100;
-
 export const TOTAL_CATS = CAT_ROSTER.length;
+
+/**
+ * The adoption price ladder — the fourth entry is also the ceiling.
+ *
+ * The shelter used to charge a flat 100, which is the wrong shape at both
+ * ends. You open with three cats and a café that runs the same handful of
+ * customers past you on a loop, so the opening adoptions are the ones worth
+ * making nearly free — they're what turns that into a café. A tenner for the
+ * fourth cat is meant to be an easy yes.
+ *
+ * The ladder roughly doubles, so the price is 100 once you're six cats in and
+ * the collection has started to feel like one.
+ */
+export const EARLY_ADOPTION_COSTS = [10, 25, 50, 100];
+
+/**
+ * The price of the next adoption, given how many cats are already home:
+ * 10, 25, 50, then 100 for every adoption after that.
+ *
+ * 100 is a ceiling, not a waypoint. The ramp exists to stop the opening cats
+ * costing the same as the last legendary, and once it's done that job there's
+ * no reason to keep climbing — a price that kept rising would end up taxing
+ * the players who stuck around longest, and the tail of the collection is
+ * already the hard part on rarity alone. 3,085 coins for the full set.
+ *
+ * Derived from the collection rather than a stored counter, so there's no new
+ * state field and no migration — an existing save prices itself correctly the
+ * moment it loads, including one whose extra commons came from the retired
+ * Market items via `seedOwnedCats`.
+ */
+export function adoptionCost(ownedCount: number): number {
+  const adoptionsMade = Math.max(0, ownedCount - STARTER_CATS.length);
+  const rung = Math.min(adoptionsMade, EARLY_ADOPTION_COSTS.length - 1);
+  return EARLY_ADOPTION_COSTS[rung];
+}
 
 /**
  * The cats you start with. Three commons keeps the town from looking abandoned
