@@ -1,14 +1,16 @@
 import React, { useMemo, useState } from 'react';
 import {
   Alert,
+  KeyboardAvoidingView,
+  Platform,
   Pressable,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCafeState } from '../hooks/useCafeState';
 import {
@@ -23,6 +25,7 @@ export default function HabitFormScreen() {
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id?: string }>();
   const { state, addHabit, updateHabit, removeHabit } = useCafeState();
+  const insets = useSafeAreaInsets();
 
   const existing = useMemo(
     () => (id ? state.habits.find((habit) => habit.id === id) : undefined),
@@ -92,7 +95,12 @@ export default function HabitFormScreen() {
   const maxTimes = tierDef.maxTimesPerDay;
 
   return (
-    <SafeAreaView style={styles.container}>
+    // The name and description fields are the first thing this screen asks
+    // for, so the form has to stay above the keyboard the whole time.
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+    >
       <View style={styles.topBar}>
         <Pressable
           onPress={() => router.back()}
@@ -106,7 +114,13 @@ export default function HabitFormScreen() {
         <View style={styles.topSpacer} />
       </View>
 
-      <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={{ paddingBottom: insets.bottom + 24 }}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="interactive"
+      >
         <View style={styles.card}>
           <Text style={styles.label}>What is it?</Text>
           <TextInput
@@ -272,7 +286,7 @@ export default function HabitFormScreen() {
 
         <View style={{ height: 40 }} />
       </ScrollView>
-    </SafeAreaView>
+    </KeyboardAvoidingView>
   );
 }
 

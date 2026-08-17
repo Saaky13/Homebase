@@ -5,11 +5,11 @@ import {
   ScrollView,
   StyleSheet,
   TouchableOpacity,
-  SafeAreaView,
   FlatList,
   Alert,
   Vibration,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useCafeState } from '../../hooks/useCafeState';
 import { SHOP_ITEMS } from '../../constants/cafeData';
 import { colors } from '../../constants/colors';
@@ -25,6 +25,7 @@ const VISUAL_UPGRADES: Record<
 
 export default function ShopTab() {
   const { state, spendCoins, unlockItem, applyVisualUpgrade } = useCafeState();
+  const insets = useSafeAreaInsets();
 
   const handleUnlockItem = (itemId: string, price: number, title: string) => {
     if (state.unlockedItems.includes(itemId)) {
@@ -82,8 +83,12 @@ export default function ShopTab() {
   };
 
   return (
-    <SafeAreaView style={styles.container}>
-      <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
+    <View style={styles.container}>
+      <ScrollView
+        style={styles.scrollView}
+        contentContainerStyle={{ paddingBottom: insets.bottom + 24 }}
+        showsVerticalScrollIndicator={false}
+      >
         <View style={[styles.card, styles.coinCard]}>
           <Text style={styles.coinLabel}>Your Coins</Text>
           <Text style={styles.coinAmount}>{state.coins}</Text>
@@ -111,7 +116,7 @@ export default function ShopTab() {
 
         <View style={{ height: 30 }} />
       </ScrollView>
-    </SafeAreaView>
+    </View>
   );
 }
 

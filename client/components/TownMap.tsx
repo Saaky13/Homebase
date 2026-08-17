@@ -1,18 +1,17 @@
-import React, { useEffect, useMemo, useRef } from 'react';
+import React, { useMemo } from 'react';
 import {
   Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 
-import { createCanvasPainter } from '../town/canvasPainter';
-import { drawRoamers, drawTown } from '../town/draw';
+import TownSurface from './TownSurface';
 import {
   BUILDINGS, buildTownGrid, FOUNTAIN, MAP_PX_H, MAP_PX_W, TILE,
 } from '../town/map';
 import {
   DAY_PALETTE, DAY_ROOFS, isNightAt, nightPalette, nightRoofs,
 } from '../town/palette';
-import { createRoamers, stepRoamers } from '../town/roam';
 import { useCafeState } from '../hooks/useCafeState';
 
 /** Keeps the town lively without turning the paths into a parade. */
@@ -27,9 +26,9 @@ const FOUNTAIN_HIT = {
 };
 
 export default function TownMap({ night }: { night?: boolean }) {
-  const canvasRef = useRef<any>(null);
   const router = useRouter();
   const { width } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
 
   const { state } = useCafeState();
 
@@ -46,72 +45,11 @@ export default function TownMap({ night }: { night?: boolean }) {
   // The map is 384px wide; narrower phones scale it down rather than clip.
   const scale = Math.min(1, width / MAP_PX_W);
 
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || typeof canvas.getContext !== 'function') return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+  // Recomputing these every render would defeat the surface's memoised base
+  // picture on native, since they are dependencies of it.
+  const palette = useMemo(() => (isNight ? nightPalette() : DAY_PALETTE), [isNight]);
+  const roofs = useMemo(() => (isNight ? nightRoofs() : DAY_ROOFS), [isNight]);
 
-    // Backing store stays at art resolution; CSS does the scaling so the
-    // pixels stay square.
-    canvas.width = MAP_PX_W;
-    canvas.height = MAP_PX_H;
-    ctx.imageSmoothingEnabled = false;
-
-    const palette = isNight ? nightPalette() : DAY_PALETTE;
-    const roofs = isNight ? nightRoofs() : DAY_ROOFS;
-
-    // The town is thousands of one-pixel rects and never changes. Painting it
-    // once into an offscreen layer and blitting that each frame is the
-    // difference between redrawing a whole tilemap 60 times a second and
-    // copying one image.
-    const base =
-      typeof document !== 'undefined' ? document.createElement('canvas') : null;
-    let baseCtx: CanvasRenderingContext2D | null = null;
-    if (base) {
-      base.width = MAP_PX_W;
-      base.height = MAP_PX_H;
-      baseCtx = base.getContext('2d');
-    }
-
-    if (baseCtx) {
-      baseCtx.imageSmoothingEnabled = false;
-      drawTown(createCanvasPainter(baseCtx), palette, roofs, grid, { night: isNight });
-    } else {
-      // No offscreen canvas available — fall back to a single static paint so
-      // the town still renders, just without wandering cats.
-      ctx.clearRect(0, 0, MAP_PX_W, MAP_PX_H);
-      drawTown(createCanvasPainter(ctx), palette, roofs, grid, { night: isNight });
-      return;
-    }
-
-    const painter = createCanvasPainter(ctx);
-    const roamers = createRoamers(grid, catIds, performance.now());
-
-    let raf = 0;
-    let last = performance.now();
-
-    const frame = (now: number) => {
-      stepRoamers(roamers, grid, now - last, now);
-      last = now;
-
-      ctx.clearRect(0, 0, MAP_PX_W, MAP_PX_H);
-      ctx.drawImage(base as HTMLCanvasElement, 0, 0);
-      drawRoamers(painter, roamers, isNight);
-
-      raf = requestAnimationFrame(frame);
-    };
-
-    raf = requestAnimationFrame(frame);
-    return () => cancelAnimationFrame(raf);
-  }, [grid, isNight, catIds]);
-
-  const canvasStyle = {
-    width: MAP_PX_W * scale,
-    height: MAP_PX_H * scale,
-    display: 'block',
-    imageRendering: 'pixelated',
-  };
 
   const labelBox = isNight ? styles.labelNight : styles.labelDay;
   const labelText = isNight ? styles.labelTextNight : styles.labelTextDay;
@@ -133,13 +71,25 @@ export default function TownMap({ night }: { night?: boolean }) {
       style={styles.scroll}
       contentContainerStyle={[
         styles.content,
-        { backgroundColor: isNight ? '#4A5570' : '#A8C98C' },
+        {
+          backgroundColor: isNight ? '#4A5570' : '#A8C98C',
+          // Padding rather than a clipped container, so the bottom of the map
+          // can still be scrolled clear of the home indicator.
+          paddingBottom: insets.bottom,
+        },
       ]}
     >
       <View style={{ width: MAP_PX_W * scale, height: MAP_PX_H * scale }}>
-        {/* Web path. Native draws the same thing through a Skia painter —
-            see town/canvasPainter.ts for the seam. */}
-        <canvas ref={canvasRef} style={canvasStyle as any} />
+        {/* Web paints into a <canvas>; iOS and Android paint the identical
+            artwork through Skia. Metro picks the platform variant. */}
+        <TownSurface
+          grid={grid}
+          palette={palette}
+          roofs={roofs}
+          isNight={isNight}
+          catIds={catIds}
+          scale={scale}
+        />
 
         {/* Transparent hit targets rather than canvas hit-testing: the specs
             already carry footprints, so press states and accessibility

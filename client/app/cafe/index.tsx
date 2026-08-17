@@ -1,18 +1,20 @@
 import React from 'react';
-import {
-  SafeAreaView,
-  StyleSheet,
-} from 'react-native';
+import { StyleSheet, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors } from '../../constants/colors';
 import CafeCanvasHost from '../../components/CafeCanvasHost';
 import PopularityMeter from '../../components/PopularityMeter';
 
 export default function CafeTab() {
+  const insets = useSafeAreaInsets();
+
   return (
-    <SafeAreaView style={styles.container}>
+    // The café floor is a fixed-size canvas, so the home-indicator gap has to
+    // be reserved on the container — there is no scroll content to pad.
+    <View style={[styles.container, { paddingBottom: insets.bottom }]}>
       <PopularityMeter />
       <CafeCanvasHost />
-    </SafeAreaView>
+    </View>
   );
 }
 

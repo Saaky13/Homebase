@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { SafeAreaView, StyleSheet } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 
 import TownMap from '../components/TownMap';
 import { useCafeState } from '../hooks/useCafeState';
@@ -16,9 +16,11 @@ export default function TownScreen() {
   }, [setGuideContext]);
 
   return (
-    <SafeAreaView style={styles.container}>
+    // No safe-area edges here: TopBar already covers the notch, and TownMap
+    // pads its own scroll content past the home indicator.
+    <View style={styles.container}>
       <TownMap />
-    </SafeAreaView>
+    </View>
   );
 }
 
