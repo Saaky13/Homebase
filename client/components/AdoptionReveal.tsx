@@ -12,7 +12,6 @@ import {
 import { CatSprite } from './CatSprite';
 import { CoinIcon } from './Icons';
 import { RARITY_STYLE, type CatSpec } from '../constants/catSprites';
-import { PULL_COST_COINS } from '../constants/gacha';
 import { colors } from '../constants/colors';
 
 /** Longer, more syncopated buzz the rarer the cat. */
@@ -97,6 +96,7 @@ function Sparkles({ count, color }: { count: number; color: string }) {
 export default function AdoptionReveal({
   cat,
   coins,
+  cost,
   remaining,
   onClose,
   onAdoptAgain,
@@ -104,6 +104,8 @@ export default function AdoptionReveal({
   /** The cat just adopted, or null when nothing is being revealed. */
   cat: CatSpec | null;
   coins: number;
+  /** Price of the *next* adoption, which climbs as the collection grows. */
+  cost: number;
   /** How many cats are still unadopted, so the footer can adapt. */
   remaining: number;
   onClose: () => void;
@@ -162,7 +164,7 @@ export default function AdoptionReveal({
   if (!shown) return null;
 
   const style = RARITY_STYLE[shown.rarity];
-  const canAdoptAgain = coins >= PULL_COST_COINS && remaining > 0;
+  const canAdoptAgain = coins >= cost && remaining > 0;
 
   return (
     <Animated.View style={[styles.scrim, { opacity: scrim }]} pointerEvents="auto">
@@ -215,7 +217,7 @@ export default function AdoptionReveal({
             {canAdoptAgain && (
               <View style={styles.costRow}>
                 <CoinIcon size={12} />
-                <Text style={styles.costText}>{PULL_COST_COINS}</Text>
+                <Text style={styles.costText}>{cost}</Text>
               </View>
             )}
           </Pressable>

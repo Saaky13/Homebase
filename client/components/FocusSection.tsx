@@ -16,6 +16,7 @@ export default function FocusSection() {
   const {
     state,
     addPearl,
+    addCoins,
     addCatToQueue,
     resetCafe,
     setGuideContext,
@@ -174,6 +175,16 @@ export default function FocusSection() {
       <View style={styles.debugRow}>
         <TouchableOpacity style={styles.debugButton} onPress={() => addPearl(50)}>
           <Text style={styles.debugButtonText}>+50 Pearls</Text>
+        </TouchableOpacity>
+
+        {/* Dev-only, same as the pearls button beside it: the shelter's prices
+            climb into the hundreds, and earning that by serving cats is too
+            slow to test an adoption against. */}
+        <TouchableOpacity
+          style={[styles.debugButton, styles.coinsButton]}
+          onPress={() => addCoins(50)}
+        >
+          <Text style={styles.debugButtonText}>+50 Coins</Text>
         </TouchableOpacity>
 
         <TouchableOpacity style={[styles.debugButton, styles.resetButton]} onPress={resetCafe}>
@@ -354,6 +365,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 10,
     marginTop: 4,
+  },
+  coinsButton: {
+    backgroundColor: colors.gold,
+    borderColor: '#B98B2E',
   },
   debugButton: {
     flex: 1,

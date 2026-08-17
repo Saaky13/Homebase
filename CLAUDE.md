@@ -314,7 +314,7 @@ These are the functions available on the context object returned by `useCafeStat
 | `muteGuideMessage` | `(id: string) => void` | Permanently mutes a repeatable beat |
 | `setFocusSessionActive` | `(active: boolean) => void` | Tells guide overlay to hide during focus |
 | `claimAchievement` | `(achievementId, pearlReward) => boolean` | Adds id to `claimedAchievements` + pays pearls, once |
-| `adoptCat` | `() => AdoptResult` | Spends 100 coins, draws an unowned cat, adds it to `ownedCats` |
+| `adoptCat` | `() => AdoptResult` | Spends `adoptionCost(ownedCats.length)`, draws an unowned cat, adds it to `ownedCats` |
 | `setRevealActive` | `(active: boolean) => void` | Tells guide overlay to hide during an adoption reveal |
 
 **Derived values on the context (not actions):**
@@ -946,7 +946,14 @@ two local tabs: `type Tab = 'adopt' | 'collection'`.
 
 ### Draw rules
 
-- **Cost:** `PULL_COST_COINS = 100`
+- **Cost:** `adoptionCost(ownedCount)` — a hand-priced ladder of
+  `10, 25, 50, 100`, where 100 is a **ceiling**, not a waypoint: every
+  adoption from the sixth cat on costs 100. 3,085 coins for the full set. The
+  ramp exists to stop the opening cats costing the same as the last legendary;
+  once it's done that, climbing further would just tax the players who stuck
+  around longest, and the tail of the collection is already the hard part on
+  rarity alone. Derived from the collection rather than a stored counter, so
+  there's no new state field and existing saves price themselves on load.
 - **No duplicates.** `pickCat()` filters to unowned cats before rolling, so a
   pull is never wasted and the collection always completes.
 - **Rarity first, then cat.** The rarity bucket is chosen by weight and the cat
@@ -1128,7 +1135,7 @@ should generally not be committed with a session-local port.
 - Procedural cat sprite system (36 cats, 5 rarities, 9 patterns, 8 directions),
   wired into the café via `catImageCache`, the town via `town/draw.ts`, and
   React via `CatSprite`
-- Cat Shelter: 100-coin gacha adoption, no duplicates, rarity-weighted draw
+- Cat Shelter: gacha adoption on a 10 → 100 price ladder that caps at 100, no duplicates, rarity-weighted draw
   (`constants/gacha.ts`), pixel capsule machine, full-screen reveal, 36-cat collection
 - Adopted cats are the only cats in the app — they roam the town and visit the café
 - Persistent state with migrations (legacy array logs → record-based, old habits → tiered,

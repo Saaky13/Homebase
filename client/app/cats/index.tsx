@@ -21,9 +21,9 @@ import {
 } from '../../constants/catSprites';
 import { CAPSULE_KEYS } from '../../constants/gachaMachine';
 import {
-  PULL_COST_COINS,
   RARITY_WEIGHTS,
   TOTAL_CATS,
+  adoptionCost,
   catsOwnedByRarity,
 } from '../../constants/gacha';
 import { colors } from '../../constants/colors';
@@ -59,7 +59,10 @@ export default function CatsTab() {
   );
 
   const remaining = TOTAL_CATS - ownedCount;
-  const canAfford = state.coins >= PULL_COST_COINS;
+  // Climbs with the collection, so it's read fresh on every render rather
+  // than being a constant.
+  const cost = adoptionCost(ownedCount);
+  const canAfford = state.coins >= cost;
   const canAdopt = canAfford && remaining > 0 && !spinning;
 
   const startAdoption = useCallback(() => {
@@ -114,7 +117,7 @@ export default function CatsTab() {
           </Text>
           <View style={styles.costPill}>
             <CoinIcon size={13} />
-            <Text style={styles.costText}>{PULL_COST_COINS}</Text>
+            <Text style={styles.costText}>{cost}</Text>
           </View>
         </Pressable>
       ) : (
@@ -128,7 +131,8 @@ export default function CatsTab() {
 
       {remaining > 0 && !canAfford && (
         <Text style={styles.hint}>
-          You have {state.coins} coins. Serve cats in the café to earn more.
+          {cost} coins for the next one — you have {state.coins}. Serve cats in
+          the café to earn more.
         </Text>
       )}
 
@@ -251,6 +255,7 @@ export default function CatsTab() {
       <AdoptionReveal
         cat={revealed}
         coins={state.coins}
+        cost={cost}
         remaining={remaining}
         onClose={closeReveal}
         onAdoptAgain={adoptAgain}
