@@ -452,6 +452,26 @@ of colour keys assembled from:
 - **React (collection, reveal)** — `components/CatSprite.tsx` renders a grid as an
   SVG data-URI `<Image>` via `utils/pixelSvg.ts`. No canvas, no Skia.
 
+> ⚠️ **Everything drawn through `utils/pixelSvg.ts` is invisible on a phone.**
+> React Native's `<Image>` decodes PNG/JPEG/GIF/WebP — not SVG — so an SVG
+> data-URI renders nothing on iOS or Android. It works on web only, because
+> there `<Image>` becomes a browser `<img>`.
+>
+> Four components are affected today: `Icons.tsx` (coin/pearl/star pills),
+> `CatSprite.tsx` (the shelter's whole collection grid), `GachaMachine.tsx`
+> (the capsule machine), and `BobaCupSprite.tsx` (the cup you drag to serve).
+> On a device the top bar loses its currency icons, the Cat Shelter shows an
+> empty grid, and the café's serve gesture has nothing to grab.
+>
+> **The fix is mechanical:** emit `<Rect>` elements with `react-native-svg`
+> instead of encoding a data-URI. The `ios-town-skia` branch does exactly this
+> for the currency icons (`Icons.tsx` + `iconGrids.ts`) — copy that pattern.
+> The other three still need porting, since the Cat Shelter and the pixel-art
+> café both landed after the device work started.
+>
+> **Until then, don't add new `pixelSvg` callers** — every one widens the gap.
+> See convention 11.
+
 The legacy PNGs in `client/assets/cats/` are no longer referenced.
 
 ---
@@ -1119,6 +1139,9 @@ should generally not be committed with a session-local port.
 - User XP / leveling system (separate from café level)
 - **Verified native iOS/Android builds** — the Skia path, `app.json` config, and
   `.native.tsx` entrypoints are in place, but no build has been run end to end
+- **Porting the `pixelSvg` components off SVG data-URIs** — the currency icons,
+  cat collection grid, capsule machine and boba cup render nothing on device.
+  See the warning in the cat sprite section
 - Sound design
 - Notifications / reminders
 - Backend / cloud sync
@@ -1162,14 +1185,20 @@ should generally not be committed with a session-local port.
     This survives unmounts, app restarts, and throttled intervals. Pausing stores
     `remainingSeconds`; running derives remaining from `endsAt - Date.now()`.
     Offline time is never credited — a session mid-run at close comes back paused.
-11. **Pixel art goes through `utils/pixelSvg.ts`.** Currency icons, collection
-    cat sprites, and the capsule machine all encode a grid to an SVG data-URI
-    rendered by a React Native `<Image>` — not an inline `<svg>`, which doesn't
-    exist on native. The café canvas is the exception: it needs `SkImage`s, so
-    `pixelImage.rasteriseGrid` draws a grid once into an offscreen Skia surface
-    and the caches (`catImageCache.ts`, `bobaImageCache.ts`) keep the snapshot
-    forever. A 28×37 grid is ~1,000 cells; painting that per cat per frame at
-    60fps is not viable.
+11. **Don't build new pixel art on `utils/pixelSvg.ts` — it is web-only.**
+    It encodes a grid to an SVG data-URI rendered by a React Native `<Image>`,
+    and **`<Image>` decodes PNG/JPEG/GIF/WebP, not SVG.** On iOS and Android it
+    renders nothing at all; it only ever worked because `<Image>` becomes a
+    browser `<img>` on web. See the warning in the cat sprite section for what
+    is currently broken because of this.
+
+    For anything new, draw the grid as `<Rect>` elements with `react-native-svg`
+    instead — one code path that works everywhere. The café canvas is the
+    separate exception: it needs `SkImage`s, so `pixelImage.rasteriseGrid` draws
+    a grid once into an offscreen Skia surface and the caches
+    (`catImageCache.ts`, `bobaImageCache.ts`) keep the snapshot forever. A 28×37
+    grid is ~1,000 cells; painting that per cat per frame at 60fps is not
+    viable.
 12. **Draw functions that may run inside a state updater must be pure.** The
     adoption draw (`constants/gacha.ts`) takes its rolls as parameters and calls
     no `Math.random()`, because React can invoke an updater more than once per
