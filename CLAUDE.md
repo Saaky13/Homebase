@@ -36,7 +36,7 @@ will fail on the café screen.
 |---|---|
 | Framework | React Native (Expo 54) with expo-router 6 |
 | Language | TypeScript 5.9, React 19.1 |
-| Rendering | Skia via `@shopify/react-native-skia` for the café floor (390×844, through the Canvas2D-shaped shim in `components/skiaCanvas2d.ts`); HTML5 Canvas for the town map (384×736); cat sprites 28×37 |
+| Rendering | Skia via `@shopify/react-native-skia` for the café floor (authored 390 wide, uniformly scaled, height flows — through the Canvas2D-shaped shim in `components/skiaCanvas2d.ts`); HTML5 Canvas for the town map (384×736); cat sprites 28×37 |
 | State | React Context + AsyncStorage (`@focus_cafe_state_v2` key) |
 | Styling | React Native `StyleSheet` — no CSS-in-JS libs, no Tailwind |
 | Animation | `requestAnimationFrame` game loop (café), `Animated` API (UI) |
@@ -70,7 +70,10 @@ cat cafe/
     │   ├── CafeCanvasHost.native.tsx # native entry — re-exports CafeCanvas directly
     │   ├── skiaCanvas2d.ts  # Canvas2D-shaped facade over Skia's imperative canvas
     │   ├── Cat.tsx          # Cat entity model — state machine, movement, drawing
-    │   ├── catImageCache.ts # Rasterises each cat×direction into a cached SkImage
+    │   ├── pixelImage.ts    # Shared grid → cached SkImage rasteriser
+    │   ├── catImageCache.ts # Caches each cat×direction as an SkImage
+    │   ├── bobaImageCache.ts # Caches the carried cup — 3 flavours × 4 fill levels
+    │   ├── BobaCupSprite.tsx # The draggable counter cup — SVG data-URI <Image>
     │   ├── CatSprite.tsx    # React cat sprite — SVG data-URI <Image>, no canvas
     │   ├── GachaMachine.tsx # Pixel capsule machine with animated crank + drop
     │   ├── AdoptionReveal.tsx  # Full-screen reveal after an adoption
@@ -82,11 +85,14 @@ cat cafe/
     │   ├── TopBar.tsx       # Persistent top bar — brand, back button, coin/pearl/level pills
     │   ├── TownMap.tsx      # Pixel-art town map component (canvas-rendered)
     │   ├── cafeConfig.ts    # Café layout constants — 10 table center coordinates
-    │   └── cafeRender.ts    # Canvas drawing helpers — background, tables, counter, floor tiles
+    │   ├── cafePixel.ts     # PixelPainter — the café's rect-only pixel-art primitives
+    │   └── cafeRender.ts    # The room — floor, rug, wall, windows, counter, tables, door
     │
     ├── constants/
     │   ├── achievements.ts  # 29 achievements across 6 categories + category colour defs
+    │   ├── bobaCup.ts       # Generated 20×30 boba cup grid — 3 flavours, variable fill
     │   ├── cafeData.ts      # Legacy cat roster (7), shop items (7), reflection prompts (4), café levels (5)
+    │   ├── cafePalette.ts   # Café interior palette + its night variant
     │   ├── catSprites.ts    # Procedural pixel-art cat system — 36 palettes, 9 patterns, grid assembly, roster of 36 cats
     │   ├── colors.ts        # Shared colour palette (cream, brown, gold, pastels, etc.)
     │   ├── gacha.ts         # Adoption draw — rarity weights, pickCat, starters, save seeding
@@ -439,8 +445,9 @@ of colour keys assembled from:
 
 **Where the sprites are drawn:**
 - **Café floor** — `components/catImageCache.ts` rasterises each cat×direction once
-  into an `SkImage` via an offscreen Skia surface, cached forever. Painting a
-  ~1,000-cell grid per cat per frame is not viable at 60fps.
+  into an `SkImage` through the shared `pixelImage.rasteriseGrid`, cached
+  forever. Painting a ~1,000-cell grid per cat per frame is not viable at 60fps.
+  The carried boba cups go through the same path (`bobaImageCache.ts`).
 - **Town map** — drawn straight onto the 2D canvas by `town/draw.ts`.
 - **React (collection, reveal)** — `components/CatSprite.tsx` renders a grid as an
   SVG data-URI `<Image>` via `utils/pixelSvg.ts`. No canvas, no Skia.
@@ -449,12 +456,46 @@ The legacy PNGs in `client/assets/cats/` are no longer referenced.
 
 ---
 
-## Café canvas (CafeCanvas.tsx + Cat.tsx + cafeRender.ts + cafeConfig.ts + skiaCanvas2d.ts)
+## Café canvas (CafeCanvas.tsx + Cat.tsx + cafeRender.ts + cafePixel.ts + cafePalette.ts + cafeConfig.ts + skiaCanvas2d.ts)
 
-The café floor is a full-screen Skia `<Canvas>` (390×844 logical pixels) driven
-by a `requestAnimationFrame` loop. Each frame is recorded into an `SkPicture`
+The café floor is a full-screen Skia `<Canvas>` driven by a
+`requestAnimationFrame` loop. Each frame is recorded into an `SkPicture`
 published as a reanimated `SharedValue`, so Skia repaints without a React
 re-render 60 times a second.
+
+**Sizing.** The room is authored **390 wide** and scaled *uniformly*
+(`scale = min(layout.width / 390, MAX_SCALE)`), so the art pixels stay square —
+stretching each axis to fit gave a 2px pixel non-square edges and squashed the
+cats. Only the width is pinned: the height flows
+(`designHeight = layout.height / scale`, floored at `MIN_DESIGN_HEIGHT = 720`),
+so the floorboards run to the bottom edge of any screen instead of being
+letterboxed or cropped. `MAX_SCALE = 1.35` keeps a phone-shaped café
+phone-shaped in a wide browser window, centred via `offsetX`.
+
+Everything that positions against the room — `CUP_STATION`, table centres, queue
+spots — is in design units and converted through `scale`/`offsetX`.
+
+**The static room is cached.** `drawCafeScene` is recorded once into an
+`SkPicture` (re-recorded only when upgrades, palette or room height change) and
+replayed with `drawPicture` each frame; only cats, drinks, want-bubbles and the
+drag target are painted per frame.
+
+### Pixel art (cafePixel.ts + cafePalette.ts)
+
+The café is drawn in the town's idiom: every mark is a filled axis-aligned rect.
+`PixelPainter` wraps `Ctx2D` with `rect`/`ellipse`/`ellipseRing`/`softRect`,
+rasterising curves into stepped pixel edges. **`PX = 2`** is the art-pixel size,
+chosen to match the cat sprites' density (a 28-wide grid drawn at ~47px);
+anything finer shimmers once scaled to a device. `noise(x, y, salt)` is
+deterministic — `Math.random()` would make the wood grain crawl every frame.
+
+`cafePalette.ts` holds the interior palette and its night variant. Night here is
+the **inverse** of the town's: a café is lit from the inside, so the room warms
+slightly toward lamplight (`LAMP_STRENGTH = 0.17`) while only what's visible
+*through* the glass drops to navy. Dimming the interior the way `town/palette.ts`
+does would read as "the café closed". `isNightAt()` is shared with the town;
+`CafeCanvas` re-checks it on a 60s timer so a café left open crosses over
+without a reload.
 
 **Platform entrypoints:** screens import `CafeCanvasHost`, never `CafeCanvas`.
 On web (`CafeCanvasHost.tsx`) Skia is CanvasKit — a WASM module — and the
@@ -478,18 +519,36 @@ interface Cat {
   x: number; y: number;
   targetX: number; targetY: number;
   speed: number;           // 3 pixels/frame
-  size: number;            // 26 (width = size * 1.8 ≈ 47px; height follows the 28×37 grid)
+  size: number;            // 30 (width = size * 1.8 * scale; height follows the 28×37 grid)
   state: CatState;         // 'walkingToLine' | 'waiting' | 'walkingToSeat' | 'seated' | 'leaving'
   seatIndex: number | null;
   lineOffsetX: number;
   seatFacing: 'front' | 'left' | 'right' | null;
   seatedAt: number | null; // timestamp when seated
+  drink: BobaFlavor | null;// the cup handed over, carried until they leave
+  scale: number;           // current draw scale, eased toward targetScale
+  targetScale: number;     // 1 standing; SEAT_SCALE once they take a chair
 }
 ```
 
-**Cat functions:** `createCat()`, `updateCat()` (per-frame movement),
-`retargetCat()` (reposition in queue), `sendCatToSeat()`, `sendCatOut()`,
-`isCatOffscreen()`, `drawCat(ctx, cat)` (renders sprite + shadow ellipse).
+**Cat functions:** `createCat()`, `updateCat()` (per-frame movement + scale
+easing), `retargetCat()` (reposition in queue), `sendCatToSeat()`,
+`sendCatOut()`, `isCatOffscreen()`, `drawCat(ctx, cat)` (sprite + contact
+shadow), `drawCatDrink(ctx, cat)` (the carried cup).
+
+`drawCatDrink` runs as a **separate pass** after every cat is drawn: group cats
+stand 28 apart and are ~54 wide, so a cup drawn with its own cat disappeared
+under the neighbour painted next.
+
+**Seated cats shrink.** `SEAT_SCALE` is `0.86` at the back chair and `0.74` at
+the side chairs — a seated cat is further into the room, and at full size it
+stood taller than the table. `updateCat` eases `scale` toward `targetScale`
+rather than snapping, so they shrink into the chair while walking over.
+`sendCatToSeat` aims the cat's **feet** at the chair (deriving the offset from
+the sprite's actual height) instead of applying a fixed lift, which is what left
+tall cats hovering and short ones sunk into the tabletop. `BACK_SEAT_NUDGE`
+offsets the middle chair a few pixels down and right so its occupant tucks in
+against the table.
 
 `drawCat` pulls its `SkImage` from `catImageCache.getCatSkImage(cat.catId,
 direction)` — it takes no sprite argument. Sprites are **not** square: height is
@@ -502,30 +561,34 @@ since the collection is seeded with three starters.
 
 ### Table layout (cafeConfig.ts)
 
-10 tables — 5 on the left, 5 on the right:
+10 tables — 5 on the left, 5 on the right. The two columns are deliberately
+**out of phase**: with matching rows on both sides the floor read as a
+spreadsheet and the eye counted rows instead of seeing a room.
 
 | ID | X | Y |
 |---|---|---|
-| L1 | 70 | 275 |
-| L2 | 100 | 360 |
-| L3 | 66 | 445 |
-| L4 | 104 | 530 |
-| L5 | 82 | 615 |
-| R1 | 320 | 275 |
-| R2 | 290 | 360 |
-| R3 | 324 | 445 |
-| R4 | 286 | 530 |
-| R5 | 308 | 615 |
+| L1 | 68 | 272 |
+| L2 | 102 | 358 |
+| L3 | 64 | 446 |
+| L4 | 106 | 530 |
+| L5 | 80 | 616 |
+| R1 | 322 | 300 |
+| R2 | 288 | 388 |
+| R3 | 326 | 472 |
+| R4 | 284 | 556 |
+| R5 | 310 | 640 |
 
 ### Seating (cafeRender.ts)
 
-Each table gets 3 seats: `middle` (y-33), `left` (x-28, y-4), `right` (x+28, y-4).
-Total: 30 seats.
+Each table gets 3 seats: `middle` (y-36), `left` (x-34, y-6), `right` (x+34, y-6).
+Total: 30 seats. These are the exact coordinates `drawTable` paints the chairs
+at — when the two drifted apart, every cat sat *beside* its chair.
 
 ### Queue system
 
-Queue spots are vertically spaced at `y = 255 + i*36`, centered at `width/2`.
-Up to 10 queue positions.
+Queue spots are vertically spaced at `y = 268 + i*46`, centered at `width/2`.
+Up to 9 queue positions. A cat is ~71 tall, so at the old 36 spacing the line
+stacked into one mound of ears.
 
 **Cat state machine:** `walkingToLine → waiting → walkingToSeat → seated → leaving`
 
@@ -538,25 +601,48 @@ Up to 10 queue positions.
 - Groups prefer empty tables; solo cats 80% prefer empty, 20% join occupied
 - Cats leave after 60s seated
 
-**Serving:**
-- Costs 5 pearls per cat in the front group
-- Awards 25 coins per cat + 1 drink served (→ popularity)
-- Sends the group to assigned seats
+### Serving is a gesture, not a button
+
+You drag the boba cup off the counter and hand it to the cat at the front of
+the line. There is no Serve button.
+
+- The cup lives at `CUP_STATION` and is a React `Animated.View` over the canvas
+  (`BobaCupSprite` → `gridToSvgUri`), not something the canvas draws
+- Drop test: nearest cat in the front group within `DROP_RADIUS` of the cup's
+  **base** — you set the cup down in front of them
+- Costs 5 pearls per cat in the front group; awards 25 coins per cat + 1 drink
+  served (→ popularity), then sends the group to assigned seats
+- Each served cat keeps `drink`, the flavour you actually handed over, and sips
+  it down through four fill levels over the minute it sits
+- The cup is **always** draggable. Gating the gesture on "is anyone waiting"
+  meant it silently refused to move, which reads as broken rather than idle — it
+  now lifts, finds nobody, and springs back
+- The `PanResponder` is built **once** in a ref and reads `canServe`, the serve
+  function and the view transform through refs. Rebuilding it per render hands
+  it a stale `serveFrontGroup` mid-drag, and the drag pays pearls against a
+  snapshot of the queue. Both `pan` and `bob` run with `useNativeDriver: false`:
+  `setValue` during a drag can't share a transform with a native-driven spring
 
 ### Visual styles (cafeRender.ts)
 
 Two style variants each for tables, counter, and rug. Controlled by `visuals.tableStyle`,
 `visuals.counterStyle`, `visuals.rugStyle` (each 1 or 2). Upgradeable via the shop.
 
-- **Option 1 tables:** Wooden with green chairs, 24×15px ellipse top
-- **Option 2 tables:** Richer brown with cream-cushioned chairs, 28×17px ellipse top
-- **Option 1 counter:** Simple wood tones (`#CF9A63`, `#D9A672`, `#B57E43`)
-- **Option 2 counter:** Richer/wider counter (`#E39D6B`, `#EDBC85`, `#C77F48`)
-- **Option 1 rug:** Narrow terracotta + gold (`#B86B4B`, `#D9A672`)
-- **Option 2 rug:** Wider dark red with stripes (`#8E4E47`, `#D5B08D`)
+- **Option 1 tables:** mint-cushioned chairs
+- **Option 2 tables:** gold-rimmed marble top, rose-cushioned chairs. Cream
+  cushions sat at the tabletop's own value and read as blank discs, so the
+  upgraded seats separate by hue instead of brightness
+- **Option 1 rug:** sage runner with diamond motifs — the room's only cool hue,
+  which is what stops the floor reading as one monotone tan band
+- **Option 2 rug:** terracotta, banded at the two ends. Stripes repeated the
+  whole way down turned the runner into a ladder
+- Both rugs sit just *above* the floor's value, never well above it: as the
+  palest thing in the room the runner stopped being a rug and became a stripe of
+  light down the middle
 
-Background: `#DCE8D4` (matcha green), room fill: `#EDF4E7`, border: `#C6D5BC`.
-Floor tiles: 32px grid with subtle gridlines.
+Shop decor is wired into the room: `decor-lights` hangs string lights,
+`decor-plants` puts potted plants at the counter ends, `decor-paintings` hangs
+frames on the wall.
 
 ---
 
@@ -1005,8 +1091,10 @@ should generally not be committed with a session-local port.
 
 ### Built and working
 - Town map with day/night cycle, 28 buildings, cats roaming via BFS pathing
-- Full café floor rendered through Skia with cat spawning, queuing, seating,
-  serving (2 visual style variants)
+- Full café floor rendered through Skia as pixel art in the town's idiom —
+  plank floor, woven runner, counter with espresso machine and boba jars,
+  windows onto the town, chalk menu board, day/night lighting (2 visual style
+  variants), with cat spawning, queuing, seating and drag-to-serve
 - Growth Hub with all 8 sections (habits, mission, reflection, focus, calendar,
   todo, resources, achievements)
 - Three-tier habit system with rep logging, streaks, pearl math (budget + per-rep models)
@@ -1077,11 +1165,17 @@ should generally not be committed with a session-local port.
 11. **Pixel art goes through `utils/pixelSvg.ts`.** Currency icons, collection
     cat sprites, and the capsule machine all encode a grid to an SVG data-URI
     rendered by a React Native `<Image>` — not an inline `<svg>`, which doesn't
-    exist on native. The café is the exception: it needs `SkImage`s, so
-    `catImageCache.ts` rasterises each cat×direction once through an offscreen
-    Skia surface and caches it forever. A 28×37 grid is ~1,000 cells; painting
-    that per cat per frame at 60fps is not viable.
+    exist on native. The café canvas is the exception: it needs `SkImage`s, so
+    `pixelImage.rasteriseGrid` draws a grid once into an offscreen Skia surface
+    and the caches (`catImageCache.ts`, `bobaImageCache.ts`) keep the snapshot
+    forever. A 28×37 grid is ~1,000 cells; painting that per cat per frame at
+    60fps is not viable.
 12. **Draw functions that may run inside a state updater must be pure.** The
     adoption draw (`constants/gacha.ts`) takes its rolls as parameters and calls
     no `Math.random()`, because React can invoke an updater more than once per
     commit. Roll outside the updater; re-check preconditions inside it.
+13. **Never hand `drawImage` the fill paint.** Skia ignores a paint's RGB when
+    drawing an image but still applies its **alpha**, so sharing `fillPaint`
+    painted every sprite at whatever opacity the last `fillStyle` happened to
+    carry — a 22% contact shadow set just before a cat left the cat 22% opaque.
+    `skiaCanvas2d.ts` keeps a separate `imagePaint` for this reason.

@@ -5,14 +5,17 @@ import { colors } from '../constants/colors';
 import {
   MAX_POPULARITY,
   displayPopularity,
-  MAX_CAFE_MULTIPLIER,
 } from '../constants/popularity';
 import { PopularityIcon } from './Icons';
 
 /**
- * The café's live standing, shown next to the queue it drives.
+ * The café's live standing, shown as one line above the room.
  *
- * Two things this is careful about:
+ * It used to be a three-row block — label, track, caption — costing about 86px
+ * before the café even started. The standing *is* the label now, so the same
+ * information fits on a single row and the room gets the height back.
+ *
+ * Two things this is still careful about:
  *
  * 1. 100 is not the expected state. A solid-but-imperfect routine settles
  *    around 60–70, and that is healthy — so the meter reads as a level rather
@@ -31,31 +34,28 @@ export default function PopularityMeter() {
 
   return (
     <View style={styles.container}>
-      <View style={styles.headerRow}>
-        <View style={styles.labelRow}>
-          <PopularityIcon size={13} />
-          <Text style={styles.label}>Popularity</Text>
-        </View>
-
-        <View style={styles.valueRow}>
-          {lost !== null && (
-            <Text style={styles.lost} accessibilityLabel={`Down ${lost} while away`}>
-              ▼ {lost} while away
-            </Text>
-          )}
-          <Text style={styles.value}>{shown}</Text>
-        </View>
-      </View>
+      <PopularityIcon size={12} />
+      <Text style={styles.standing} numberOfLines={1}>
+        {describeStanding(shown)}
+      </Text>
 
       <View style={styles.track}>
         <View style={[styles.fill, { width: `${fillPercent}%` }]} />
       </View>
 
-      <Text style={styles.caption}>
-        {describeStanding(shown)}
-        {cafeMultiplier > 1 &&
-          `  ·  café ×${cafeMultiplier.toFixed(2).replace(/0$/, '')}`}
-      </Text>
+      {lost !== null && (
+        <Text style={styles.lost} accessibilityLabel={`Down ${lost} while away`}>
+          ▼{lost}
+        </Text>
+      )}
+
+      {cafeMultiplier > 1 && (
+        <Text style={styles.multiplier}>
+          ×{cafeMultiplier.toFixed(2).replace(/0$/, '')}
+        </Text>
+      )}
+
+      <Text style={styles.value}>{shown}</Text>
     </View>
   );
 }
@@ -66,57 +66,33 @@ export default function PopularityMeter() {
  * default target.
  */
 function describeStanding(value: number): string {
-  if (value >= 95) return 'Packed — the whole town knows this place';
+  if (value >= 95) return 'Packed out';
   if (value >= 70) return 'Bustling';
   if (value >= 40) return 'Steady regulars';
-  if (value >= 15) return 'Quiet, but the door keeps opening';
-  return 'Slow day — a few cats still wander in';
+  if (value >= 15) return 'Quiet, door still opening';
+  return 'Slow day';
 }
 
 const styles = StyleSheet.create({
   container: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
     paddingHorizontal: 14,
-    paddingVertical: 10,
+    paddingVertical: 7,
     backgroundColor: colors.paper,
     borderBottomWidth: 2,
     borderBottomColor: colors.brown300,
   },
-  headerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 6,
-  },
-  labelRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-  },
-  label: {
-    fontSize: 10,
-    color: colors.brown900,
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
-    fontWeight: '800',
-  },
-  valueRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  lost: {
+  standing: {
     fontSize: 11,
-    fontWeight: '700',
-    color: colors.danger,
-  },
-  value: {
-    fontSize: 16,
-    fontWeight: '900',
+    fontWeight: '800',
     color: colors.brown900,
   },
   track: {
-    height: 10,
-    borderRadius: 6,
+    flex: 1,
+    height: 7,
+    borderRadius: 4,
     backgroundColor: colors.lightGray,
     overflow: 'hidden',
     borderWidth: 1,
@@ -124,13 +100,24 @@ const styles = StyleSheet.create({
   },
   fill: {
     height: '100%',
-    borderRadius: 6,
+    borderRadius: 4,
     backgroundColor: colors.accentBlush,
   },
-  caption: {
-    marginTop: 5,
-    fontSize: 11,
-    fontWeight: '600',
-    color: colors.mediumGray,
+  lost: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: colors.danger,
+  },
+  multiplier: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: colors.accentTeal,
+  },
+  value: {
+    fontSize: 14,
+    fontWeight: '900',
+    color: colors.brown900,
+    minWidth: 20,
+    textAlign: 'right',
   },
 });
