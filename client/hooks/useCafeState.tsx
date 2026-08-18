@@ -30,6 +30,57 @@ import {
   STARTER_CATS,
 } from '../constants/gacha';
 import type { CatSpec } from '../constants/catSprites';
+import {
+  getPlant,
+  growthStage,
+  yieldForWatering,
+  BLOOM_BONUS,
+  PENDING_CAP_DAYS,
+} from '../constants/plants';
+
+/**
+ * One pot on a bench.
+ *
+ * Growth is counted in *waterings*, never in elapsed time: a plant you ignored
+ * for a week is exactly where you left it, older and thirstier but no further
+ * along. Coins are paid at the moment you water a mature plant rather than
+ * accruing on a clock, for the same reason — the room pays you for showing up,
+ * and there is no way to earn from it while the app is closed.
+ */
+export interface Plant {
+  id: string;
+  species: string;
+  /** Bench socket index. */
+  slot: number;
+  plantedOn: string;
+  waterCount: number;
+  lastWateredDate: string | null;
+  /** Consecutive days gone by without water. Reset by watering. */
+  thirst: number;
+  /** Latched once it dies, so a husk stays a husk. */
+  dead: boolean;
+  /** Earned but unharvested — waiting on a tap. */
+  pendingCoins: number;
+}
+
+export interface GreenhouseState {
+  plants: Plant[];
+  /** Benches unlocked. The rest are drawn but bare. */
+  benches: number;
+  /** Bought and not yet planted, keyed by species. */
+  seeds: Record<string, number>;
+  /** From composting a husk; each one skips a growth day. */
+  fertilizer: number;
+  /** Whether the misting system has been installed. */
+  misting: boolean;
+  /** Days of water in hand, 0–3. Keeps plants alive, never advances them. */
+  reservoir: number;
+  lastSettledDate: string | null;
+}
+
+export type PlantResult =
+  | { ok: true; plant: Plant }
+  | { ok: false; reason: 'seed' | 'occupied' | 'locked' };
 
 export interface QueueCat {
   id: number;
@@ -172,6 +223,8 @@ export interface CafeState {
   // true while an adoption reveal is on screen, so the guide overlay stays out
   // of the way. Never persisted across restarts, same as focusSessionActive.
   revealActive: boolean;
+  /** The greenhouse: pots, seeds, and the day the plants were last settled. */
+  greenhouse: GreenhouseState;
 }
 
 /**
@@ -259,6 +312,20 @@ const initialState: CafeState = {
   claimedAchievements: [],
   ownedCats: [...STARTER_CATS],
   revealActive: false,
+  greenhouse: {
+    plants: [],
+    // Two benches is a working greenhouse with room to grow; the third is
+    // visible from day one so the upgrade has something to point at.
+    benches: 2,
+    // A free starter seed, so the three-day clock starts on your first visit
+    // rather than after a shopping trip — the same reason the collection ships
+    // with three cats.
+    seeds: { mung: 1 },
+    fertilizer: 0,
+    misting: false,
+    reservoir: 0,
+    lastSettledDate: null,
+  },
 };
 
 /**
@@ -383,6 +450,93 @@ function settlePopularity(state: CafeState, todayKey: string): CafeState {
   };
 }
 
+/**
+ * Brings the greenhouse up to date with today.
+ *
+ * Same shape and the same reason as `settlePopularity`: this has to stay
+ * correct across app closes and missed days, so it is a pure function of *days
+ * elapsed* rather than of how often the app is opened. Settling twice in one
+ * day is a no-op; settling once after five days applies all five.
+ *
+ * Only absence is handled here. Growth and coins both happen at the moment you
+ * water something, so there is nothing to accrue for a day nobody showed up —
+ * which is the whole design.
+ */
+function settleGreenhouse(state: CafeState, todayKey: string): CafeState {
+  const gh = state.greenhouse;
+
+  // First run, or a save from before the greenhouse existed: adopt today as
+  // the baseline rather than retroactively killing everything.
+  if (!gh.lastSettledDate) {
+    return { ...state, greenhouse: { ...gh, lastSettledDate: todayKey } };
+  }
+
+  const days = daysBetweenDateKeys(gh.lastSettledDate, todayKey);
+  if (days <= 0) return state;
+
+  // The misting reservoir spends a day per day to keep plants *alive*. It
+  // never advances growth and never accrues yield, so a long weekend costs you
+  // the progress and the income but not the plant.
+  const covered = gh.misting ? Math.min(days, gh.reservoir) : 0;
+  const dry = days - covered;
+
+  const plants = gh.plants.map((plant) => {
+    if (plant.dead || dry <= 0) return plant;
+    const spec = getPlant(plant.species);
+    if (!spec) return plant;
+
+    const thirst = plant.thirst + dry;
+    // Strictly greater: on the morning after a watering thirst is already 1,
+    // and today is still savable. A plant dies for the days you *missed*, not
+    // for the day you're currently standing in.
+    return { ...plant, thirst, dead: thirst > spec.dieAfter };
+  });
+
+  return {
+    ...state,
+    greenhouse: {
+      ...gh,
+      plants,
+      reservoir: gh.reservoir - covered,
+      lastSettledDate: todayKey,
+    },
+  };
+}
+
+/**
+ * Whether today counts for the bloom bonus — the mechanic that is the whole
+ * thesis of the app in one line: the garden pays more on days you did the
+ * actual work.
+ */
+function isBloomDay(state: CafeState, todayKey: string): boolean {
+  if (state.missionLastClaimedDate === todayKey) return true;
+  const day = state.habitLogs[todayKey] ?? {};
+  return state.habits.some((h) => (day[h.id] ?? 0) >= Math.max(1, h.timesPerDay));
+}
+
+/** Coins in, plus the level tick — shared by `addCoins` and harvesting. */
+function creditCoins(
+  state: CafeState,
+  amount: number,
+  todayKey: string
+): CafeState {
+  const withDay = ensureDailyStat(state.dailyStats, todayKey);
+  const next = {
+    ...state,
+    coins: state.coins + amount,
+    dailyStats: {
+      ...withDay,
+      [todayKey]: {
+        ...withDay[todayKey],
+        coinsEarned: withDay[todayKey].coinsEarned + amount,
+      },
+    },
+  };
+
+  if (next.coins >= next.level * 100) next.level += 1;
+  return next;
+}
+
 function ensureDailyStat(
   stats: Record<string, DailyStat>,
   dateKey: string
@@ -463,6 +617,16 @@ type CafeContextType = {
   claimAchievement: (achievementId: string, pearlReward: number) => boolean;
   adoptCat: () => AdoptResult;
   setRevealActive: (active: boolean) => void;
+  buySeed: (speciesId: string) => boolean;
+  plantSeed: (speciesId: string, slot: number) => PlantResult;
+  // Waters every pot the can was swept over, and reports the total so the
+  // screen can show one summary instead of one toast per plant.
+  waterPlants: (
+    plantIds: string[],
+    dateKey?: string
+  ) => { watered: number; earned: number; bloom: boolean };
+  harvestPlant: (plantId: string) => number;
+  clearHusk: (plantId: string, compost: boolean) => boolean;
 };
 
 const CafeContext = createContext<CafeContextType | null>(null);
@@ -547,6 +711,21 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
             ownedCats: Array.isArray(parsed.ownedCats)
               ? parsed.ownedCats
               : seedOwnedCats(parsed.unlockedItems ?? []),
+            // Saves from before the greenhouse existed get a fresh one, free
+            // starter seed included. The nested spread matters: a partial
+            // greenhouse from a future rollback would otherwise arrive without
+            // its seeds map and blow up on first read.
+            greenhouse: {
+              ...initialState.greenhouse,
+              ...(parsed.greenhouse ?? {}),
+              plants: Array.isArray(parsed.greenhouse?.plants)
+                ? parsed.greenhouse.plants
+                : [],
+              seeds: {
+                ...(parsed.greenhouse ? {} : initialState.greenhouse.seeds),
+                ...(parsed.greenhouse?.seeds ?? {}),
+              },
+            },
             // never resume a "session in progress" flag across app restarts
             focusSessionActive: false,
             revealActive: false,
@@ -566,9 +745,14 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
         const lost = merged.popularity - settled.popularity;
         setPopularityLostWhileAway(lost >= 1 ? lost : null);
 
+        // Thirst owed for days away is applied here too, so walking into the
+        // greenhouse shows what actually happened rather than yesterday's
+        // picture. Every gain path settles again before it writes.
+        const grown = settleGreenhouse(settled, todayKey);
+
         const next = {
-          ...settled,
-          guide: { ...settled.guide, lastOpenedDate: todayKey },
+          ...grown,
+          guide: { ...grown.guide, lastOpenedDate: todayKey },
         };
 
         setState(next);
@@ -707,26 +891,7 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
     (amount: number) => {
       const todayKey = getTodayDateKey();
 
-      commit((prev) => {
-        const withDay = ensureDailyStat(prev.dailyStats, todayKey);
-        const next = {
-          ...prev,
-          coins: prev.coins + amount,
-          dailyStats: {
-            ...withDay,
-            [todayKey]: {
-              ...withDay[todayKey],
-              coinsEarned: withDay[todayKey].coinsEarned + amount,
-            },
-          },
-        };
-
-        if (next.coins >= next.level * 100) {
-          next.level += 1;
-        }
-
-        return next;
-      });
+      commit((prev) => creditCoins(prev, amount, todayKey));
     },
     [commit]
   );
@@ -1441,6 +1606,212 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
     return { ok: true, cat };
   }, [commit]);
 
+  /* ---------------------------- the greenhouse --------------------------- */
+
+  const buySeed = useCallback(
+    (speciesId: string): boolean => {
+      const spec = getPlant(speciesId);
+      if (!spec) return false;
+
+      let bought = false;
+      commit((prev) => {
+        if (prev.level < spec.level || prev.coins < spec.cost) return prev;
+        bought = true;
+        return {
+          ...prev,
+          coins: prev.coins - spec.cost,
+          greenhouse: {
+            ...prev.greenhouse,
+            seeds: {
+              ...prev.greenhouse.seeds,
+              [speciesId]: (prev.greenhouse.seeds[speciesId] ?? 0) + 1,
+            },
+          },
+        };
+      });
+      return bought;
+    },
+    [commit]
+  );
+
+  const plantSeed = useCallback(
+    (speciesId: string, slot: number): PlantResult => {
+      const todayKey = getTodayDateKey();
+      // Decided against the mirror rather than inside the updater, for the same
+      // reason `adoptCat` does: the caller animates the result, so it can't
+      // depend on whether React ran the updater eagerly or deferred it.
+      const current = stateRef.current;
+      const gh = current.greenhouse;
+
+      if ((gh.seeds[speciesId] ?? 0) <= 0) return { ok: false, reason: 'seed' };
+      if (gh.plants.some((p) => p.slot === slot)) {
+        return { ok: false, reason: 'occupied' };
+      }
+      if (slot >= gh.benches * 4) return { ok: false, reason: 'locked' };
+
+      const plant: Plant = {
+        id: `plant-${Date.now()}-${slot}`,
+        species: speciesId,
+        slot,
+        plantedOn: todayKey,
+        // Compost from a dead plant hands you the first day of the next one.
+        waterCount: gh.fertilizer > 0 ? 1 : 0,
+        lastWateredDate: null,
+        thirst: 0,
+        dead: false,
+        pendingCoins: 0,
+      };
+
+      commit((prev) => {
+        const p = prev.greenhouse;
+        // `prev` is the authority — the mirror can lag, and React may run this
+        // updater more than once for a single commit.
+        if ((p.seeds[speciesId] ?? 0) <= 0) return prev;
+        if (p.plants.some((x) => x.slot === slot || x.id === plant.id)) return prev;
+
+        return {
+          ...prev,
+          greenhouse: {
+            ...p,
+            plants: [...p.plants, { ...plant, waterCount: p.fertilizer > 0 ? 1 : 0 }],
+            seeds: { ...p.seeds, [speciesId]: p.seeds[speciesId] - 1 },
+            fertilizer: Math.max(0, p.fertilizer - 1),
+          },
+        };
+      });
+
+      return { ok: true, plant };
+    },
+    [commit]
+  );
+
+  /**
+   * Waters every pot the can was swept over. Returns how many actually took
+   * water and what they paid, so the screen can show one summary rather than
+   * one toast per pot.
+   */
+  const waterPlants = useCallback(
+    (plantIds: string[], dateKey?: string) => {
+      const todayKey = dateKey ?? getTodayDateKey();
+      const ids = new Set(plantIds);
+      let watered = 0;
+      let earned = 0;
+      let bloomed = false;
+
+      commit((prev) => {
+        const settled = settleGreenhouse(prev, todayKey);
+        const bloom = isBloomDay(settled, todayKey);
+        watered = 0;
+        earned = 0;
+
+        const plants = settled.greenhouse.plants.map((plant) => {
+          if (!ids.has(plant.id) || plant.dead) return plant;
+          // One watering per plant per day. A second sweep is a no-op rather
+          // than a way to farm a mature plant by dragging in circles.
+          if (plant.lastWateredDate === todayKey) return plant;
+
+          const spec = getPlant(plant.species);
+          if (!spec) return plant;
+
+          watered += 1;
+          const waterCount = plant.waterCount + 1;
+
+          // The watering that completes growth also pays — reaching maturity
+          // should land as a payoff, not as one more empty day.
+          const mature = growthStage(waterCount, spec.daysToMature) === 'mature';
+          const gain = mature ? yieldForWatering(spec, bloom) : 0;
+          earned += gain;
+
+          // Capped so ignoring the harvest tap for a month doesn't compound,
+          // while a single missed collection costs nothing.
+          const cap = Math.round(spec.coinsPerDay * BLOOM_BONUS) * PENDING_CAP_DAYS;
+
+          return {
+            ...plant,
+            waterCount,
+            lastWateredDate: todayKey,
+            thirst: 0,
+            pendingCoins: Math.min(cap, plant.pendingCoins + gain),
+          };
+        });
+
+        if (!watered) return settled;
+        bloomed = bloom;
+
+        return {
+          ...settled,
+          greenhouse: {
+            ...settled.greenhouse,
+            plants,
+            // A visit tops the reservoir back up, one day at a time.
+            reservoir: settled.greenhouse.misting
+              ? Math.min(3, settled.greenhouse.reservoir + 1)
+              : settled.greenhouse.reservoir,
+          },
+        };
+      });
+
+      return { watered, earned, bloom: bloomed };
+    },
+    [commit]
+  );
+
+  const harvestPlant = useCallback(
+    (plantId: string): number => {
+      const todayKey = getTodayDateKey();
+      let collected = 0;
+
+      commit((prev) => {
+        const plant = prev.greenhouse.plants.find((p) => p.id === plantId);
+        if (!plant || plant.pendingCoins <= 0) return prev;
+
+        collected = plant.pendingCoins;
+        // Emptying the pot and paying out are one commit; splitting them would
+        // leave a window where the coins exist nowhere.
+        const credited = creditCoins(prev, collected, todayKey);
+
+        return {
+          ...credited,
+          greenhouse: {
+            ...credited.greenhouse,
+            plants: credited.greenhouse.plants.map((p) =>
+              p.id === plantId ? { ...p, pendingCoins: 0 } : p
+            ),
+          },
+        };
+      });
+
+      return collected;
+    },
+    [commit]
+  );
+
+  /**
+   * Clears a husk. Composting returns a fertilizer instead of nothing, so a
+   * dead plant hands you the first step of the next one rather than a hole —
+   * permanent loss in a self-improvement app is a quit risk.
+   */
+  const clearHusk = useCallback(
+    (plantId: string, compost: boolean): boolean => {
+      let cleared = false;
+      commit((prev) => {
+        const plant = prev.greenhouse.plants.find((p) => p.id === plantId);
+        if (!plant || !plant.dead) return prev;
+        cleared = true;
+        return {
+          ...prev,
+          greenhouse: {
+            ...prev.greenhouse,
+            plants: prev.greenhouse.plants.filter((p) => p.id !== plantId),
+            fertilizer: prev.greenhouse.fertilizer + (compost ? 1 : 0),
+          },
+        };
+      });
+      return cleared;
+    },
+    [commit]
+  );
+
   return (
     <CafeContext.Provider
       value={{
@@ -1489,6 +1860,11 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
         claimAchievement,
         adoptCat,
         setRevealActive,
+        buySeed,
+        plantSeed,
+        waterPlants,
+        harvestPlant,
+        clearHusk,
       }}
     >
       {children}

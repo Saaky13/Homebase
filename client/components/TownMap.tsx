@@ -7,7 +7,7 @@ import { useRouter } from 'expo-router';
 import { createCanvasPainter } from '../town/canvasPainter';
 import { drawRoamers, drawTown } from '../town/draw';
 import {
-  BUILDINGS, buildTownGrid, FOUNTAIN, MAP_PX_H, MAP_PX_W, TILE,
+  BUILDINGS, buildTownGrid, FOUNTAIN, GREENHOUSE, MAP_PX_H, MAP_PX_W, TILE,
 } from '../town/map';
 import {
   DAY_PALETTE, DAY_ROOFS, isNightAt, nightPalette, nightRoofs,
@@ -24,6 +24,18 @@ const FOUNTAIN_HIT = {
   y: FOUNTAIN.ty * TILE - 34,
   w: 68,
   h: 62,
+};
+
+/**
+ * The greenhouse is drawn from its own spec rather than as a BuildingSpec —
+ * it's glass, not brick, and shares none of the roof/window/door vocabulary —
+ * so it needs its own hit target instead of riding the BUILDINGS loop.
+ */
+const GREENHOUSE_HIT = {
+  x: GREENHOUSE.tx * TILE,
+  y: GREENHOUSE.ty * TILE,
+  w: GREENHOUSE.tw * TILE,
+  h: GREENHOUSE.th * TILE,
 };
 
 export default function TownMap({ night }: { night?: boolean }) {
@@ -160,6 +172,22 @@ export default function TownMap({ night }: { night?: boolean }) {
           ]}
         />
 
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Greenhouse"
+          onPress={() => router.push('/greenhouse' as any)}
+          style={({ pressed }) => [
+            styles.hit,
+            {
+              left: GREENHOUSE_HIT.x * scale,
+              top: GREENHOUSE_HIT.y * scale,
+              width: GREENHOUSE_HIT.w * scale,
+              height: GREENHOUSE_HIT.h * scale,
+            },
+            pressed && styles.hitPressed,
+          ]}
+        />
+
         {BUILDINGS.filter((b) => b.route).map((b) => (
           <Pressable
             key={b.id}
@@ -186,6 +214,13 @@ export default function TownMap({ night }: { night?: boolean }) {
             (b.ty * TILE + b.th * TILE + 1) * scale,
             b.label as string
           )
+        )}
+
+        {renderLabel(
+          'greenhouse',
+          (GREENHOUSE_HIT.x + GREENHOUSE_HIT.w / 2) * scale,
+          (GREENHOUSE_HIT.y + GREENHOUSE_HIT.h + 1) * scale,
+          'Greenhouse'
         )}
 
         {renderLabel(
