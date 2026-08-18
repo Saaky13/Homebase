@@ -32,6 +32,7 @@ export default function RootLayout() {
             <Stack.Screen name="shop/index" />
             <Stack.Screen name="habits/index" />
             <Stack.Screen name="cats/index" />
+            <Stack.Screen name="greenhouse/index" />
             <Stack.Screen name="habit-form" options={{ presentation: 'card' }} />
           </Stack>
         </View>

@@ -51,7 +51,13 @@ export interface BuildingSpec {
 
 /** Where the fountain sits, in tiles. The Growth Hub entry point. */
 export const FOUNTAIN = { tx: 16, ty: 15 } as const;
-export const GREENHOUSE = { tx: 5, ty: 50, tw: 9, th: 6 } as const;
+/**
+ * The greenhouse. Moved up beside the café/market/shelter cluster from the
+ * southern fields once it became somewhere you visit *every day* — the same
+ * reasoning that put the shelter here rather than on an empty plot. Its east
+ * edge fronts onto the street running south from y=44.
+ */
+export const GREENHOUSE = { tx: 4, ty: 43, tw: 9, th: 6 } as const;
 
 export const BUILDINGS: BuildingSpec[] = [
   { id: 'library', tx: 6, ty: 9, tw: 6, th: 5, color: 'b', roof: 'peak', win: 'arch', door: 'arch', sign: true, chimney: true, label: 'Library', route: '/habits' },
