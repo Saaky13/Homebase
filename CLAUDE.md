@@ -76,6 +76,12 @@ cat cafe/
     │   ├── BobaCupSprite.tsx # The draggable counter cup — SVG data-URI <Image>
     │   ├── CatSprite.tsx    # React cat sprite — SVG data-URI <Image>, no canvas
     │   ├── GachaMachine.tsx # Pixel capsule machine with animated crank + drop
+    │   ├── GreenhouseCanvas.tsx # The greenhouse — Skia, but NO render loop
+    │   ├── GreenhouseCanvasHost.tsx / .native.tsx # the WithSkiaWeb seam
+    │   ├── greenhouseConfig.ts  # Greenhouse geometry — sockets, benches, stations
+    │   ├── greenhouseRender.ts  # The room — glass, limewash wall, benches, potting bench
+    │   ├── plantImageCache.ts   # Caches species x stage x wet/dry as SkImages
+    │   ├── SeedRackSheet.tsx    # Bottom sheet — the seed packets you buy from
     │   ├── AdoptionReveal.tsx  # Full-screen reveal after an adoption
     │   ├── CurrencyBar.tsx  # Coins + Pearls bar (unused — replaced by TopBar pills)
     │   ├── FocusSection.tsx # Focus timer UI — rendered as a Growth Hub section
@@ -141,6 +147,7 @@ The app uses a **Stack navigator** (no tab bar). The town map is the home screen
 | `/habits` | Growth Hub | Tap the fountain, library, mission hall, or archive on the town map |
 | `/shop` | Market | Tap the market building on the town map |
 | `/cats` | Cat Shelter | Tap the shelter building on the town map |
+| `/greenhouse` | Greenhouse | Tap the greenhouse on the town map |
 | `/habit-form` | Habit Form | From Growth Hub → Habits → "+ New habit" or long-press a habit tile |
 
 The **TopBar** (`components/TopBar.tsx`) is rendered outside the Stack in `_layout.tsx`
@@ -202,6 +209,7 @@ interface CafeState {
   focusTimer: FocusTimer;                    // focus session state
   claimedAchievements: string[];             // achievement ids whose pearls were claimed
   ownedCats: string[];                       // roster ids adopted from the shelter
+  greenhouse: GreenhouseState;               // plants, benches, seed packets, misting
   revealActive: boolean;                     // adoption reveal on screen; never persisted
 }
 ```
@@ -249,6 +257,32 @@ interface FocusTimer {
 interface TodoItem { id: string; text: string; done: boolean; }
 
 interface CafeVisuals { tableStyle: number; counterStyle: number; rugStyle: number; }
+
+interface Plant {
+  id: string;
+  species: string;               // id from constants/plants.ts
+  slot: number;                  // 0–11, index into getSockets()
+  plantedOn: string;             // dateKey
+  waterCount: number;            // watered days so far; drives the growth stage
+  lastWateredDate: string | null;// one watering per plant per day
+  thirst: number;                // consecutive dry days; > spec.dieAfter kills it
+  dead: boolean;                 // a husk, until you clear or compost it
+  pendingCoins: number;          // earned but not yet tapped to collect
+}
+
+interface GreenhouseState {
+  plants: Plant[];
+  benches: number;               // unlocked benches; locked ones draw bare
+  seeds: Record<string, number>; // packets in hand, by species id
+  fertilizer: number;
+  misting: boolean;              // reservoir keeps plants alive, never grows them
+  reservoir: number;
+  lastSettledDate: string | null;// dateKey through which thirst was applied
+}
+
+type PlantResult =
+  | { ok: true; plant: Plant }
+  | { ok: false; reason: 'seed' | 'occupied' | 'locked' };
 
 type AdoptResult =
   | { ok: true; cat: CatSpec }
@@ -316,6 +350,11 @@ These are the functions available on the context object returned by `useCafeStat
 | `claimAchievement` | `(achievementId, pearlReward) => boolean` | Adds id to `claimedAchievements` + pays pearls, once |
 | `adoptCat` | `() => AdoptResult` | Spends `adoptionCost(ownedCats.length)`, draws an unowned cat, adds it to `ownedCats` |
 | `setRevealActive` | `(active: boolean) => void` | Tells guide overlay to hide during an adoption reveal |
+| `buySeed` | `(speciesId: string) => boolean` | Spends coins, adds a packet to `greenhouse.seeds` |
+| `plantSeed` | `(speciesId, slot) => PlantResult` | Consumes a packet, puts a plant in a socket |
+| `waterPlants` | `(plantIds, dateKey?) => {watered, earned, bloom}` | One watering per plant per day; pays the yield at the moment of watering |
+| `harvestPlant` | `(plantId: string) => number` | Collects `pendingCoins`; returns what was paid |
+| `clearHusk` | `(plantId, compost: boolean) => boolean` | Removes a dead plant, composting for a partial refund |
 
 **Derived values on the context (not actions):**
 
@@ -351,9 +390,16 @@ Upgrades → Café quality multiplier (1.0×–2.0×)   Adopted cats roam the to
 Popularity → Cat spawn rate + group size → More cats to serve → More coins
 ```
 
-Coins have two sinks: café quality (which compounds, via the multiplier) and
-the shelter (which doesn't compound — it's the collection reward). Only the
-first feeds back into the loop.
+Coins have three sinks: café quality (which compounds, via the multiplier), the
+shelter (which doesn't compound — it's the collection reward), and the
+greenhouse (which pays coins *back*, but only if you keep showing up).
+
+**The greenhouse loop:** buy a seed → drag the pot onto a bench → water it once
+a day → it sprouts, grows, matures → tap to collect the coins it banked. Miss
+enough days in a row and it dies. Expensive species pay more per watering and
+die faster, so the ceiling is set by how reliably you open the app, not by how
+many coins you had on day one. That is the whole point: it is the only part of
+the economy that can go backwards through neglect alone.
 
 **Focus timer rates:** 1 boba per 60 seconds, 1 pearl per 300 seconds.
 These constants are `SECONDS_PER_BOBA` and `SECONDS_PER_PEARL` in `useCafeState.tsx`.
@@ -1140,6 +1186,10 @@ should generally not be committed with a session-local port.
 - Adopted cats are the only cats in the app — they roam the town and visit the café
 - Persistent state with migrations (legacy array logs → record-based, old habits → tiered,
   pre-shelter saves → seeded collection)
+- Greenhouse: 12 sockets across 3 benches, 9 species with per-species growth
+  and fragility, daily watering by dragging the can, harvest-by-tap, husks and
+  composting, a misting reservoir that keeps plants alive without growing them,
+  and a day/night room lit by sun or by grow lamps
 - TopBar with currency pills persistent across all screens
 
 ### Not yet built
@@ -1210,7 +1260,25 @@ should generally not be committed with a session-local port.
     adoption draw (`constants/gacha.ts`) takes its rolls as parameters and calls
     no `Math.random()`, because React can invoke an updater more than once per
     commit. Roll outside the updater; re-check preconditions inside it.
-13. **Never hand `drawImage` the fill paint.** Skia ignores a paint's RGB when
+13. **The greenhouse has no render loop, and should not grow one.** Nothing in
+    that room moves on its own — plants change once a day, when you water them
+    — so the scene is recorded into `SkPicture`s and replayed. The room picture
+    is re-recorded only when size, palette or bench count changes; the frame
+    picture only when a plant does. Adding a `requestAnimationFrame` there
+    would cost a repaint per frame to draw a still life.
+14. **The trough lips are drawn after the plants, not with the bench.**
+    `drawGreenhouseScene` deliberately omits them and `drawBenchFronts` paints
+    them in a later pass, because they have to overlap the pots — that overlap
+    is the only reason a plant looks planted rather than placed. Folding them
+    back into the bench silently un-sinks every pot.
+15. **The greenhouse's back wall is limewash and its floor is a short strip.**
+    It was brick, the full height, and the room collapsed into one warm
+    mid-value field with the pots and the benches. Limewash is quiet by
+    construction — but a wall alone gives the room no ground, so anything meant
+    to be standing on the floor floats. `floorRunY()` is the line where that
+    stops, it is anchored to the last bench rather than to the screen bottom,
+    and floor-level clutter belongs on it.
+16. **Never hand `drawImage` the fill paint.** Skia ignores a paint's RGB when
     drawing an image but still applies its **alpha**, so sharing `fillPaint`
     painted every sprite at whatever opacity the last `fillStyle` happened to
     carry — a 22% contact shadow set just before a cat left the cat 22% opaque.
