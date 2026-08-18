@@ -1,7 +1,6 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Alert,
-  Animated,
   Pressable,
   SafeAreaView,
   ScrollView,
@@ -11,8 +10,8 @@ import {
   View,
 } from 'react-native';
 import { useRouter } from 'expo-router';
+import { useFonts } from 'expo-font';
 import { useCafeState } from '../../hooks/useCafeState';
-import { colors } from '../../constants/colors';
 import { getReflectionPromptForDate, SHOP_ITEMS } from '../../constants/cafeData';
 import { getCat } from '../../constants/catSprites';
 import FocusSection from '../../components/FocusSection';
@@ -23,6 +22,23 @@ import {
   pearlsForRep,
   TIER_ORDER,
 } from '../../constants/habitTiers';
+import {
+  PixelButton,
+  PixelChip,
+  PixelIcon,
+  PixelPanel,
+  PixelProgress,
+  PixelText,
+  usePixelMaterial,
+} from '../../components/pixel';
+import {
+  ACCENTS,
+  BEVEL_THIN,
+  PIXEL_FONT,
+  PIXEL_FONT_FILE,
+  PX,
+} from '../../constants/pixelTheme';
+import type { SectionIconKey } from '../../constants/pixelIcons';
 import ACHIEVEMENTS, {
   ACHIEVEMENT_CATEGORIES,
   AchievementCategory,
@@ -50,60 +66,28 @@ interface CalendarDay {
   isToday: boolean;
 }
 
-function ThreeDButton({
-  title,
-  subtitle,
-  emoji,
-  colorStyle,
-  onPress,
-  dimmed,
-}: {
-  title: string;
-  subtitle: string;
-  emoji: string;
-  colorStyle: any;
-  onPress: () => void;
-  // a dimmed tile still opens its section — it just signals "nothing left to
-  // do here today", the way a completed habit tile fades out
-  dimmed?: boolean;
-}) {
-  const pressedY = useRef(new Animated.Value(0)).current;
-
-  const pressIn = () => {
-    Animated.timing(pressedY, {
-      toValue: 5,
-      duration: 70,
-      useNativeDriver: true,
-    }).start();
-  };
-
-  const pressOut = () => {
-    Animated.spring(pressedY, {
-      toValue: 0,
-      useNativeDriver: true,
-      speed: 20,
-      bounciness: 5,
-    }).start();
-  };
-
-  return (
-    <View style={styles.tileShadowLayer}>
-      <Animated.View style={{ transform: [{ translateY: pressedY }] }}>
-        <Pressable
-          onPress={onPress}
-          onPressIn={pressIn}
-          onPressOut={pressOut}
-          style={[styles.tileFace, colorStyle, dimmed && styles.tileDimmed]}
-        >
-          <View style={styles.tileGloss} />
-          <Text style={styles.tileEmoji}>{emoji}</Text>
-          <Text style={styles.tileTitle}>{title}</Text>
-          <Text style={styles.tileSubtitle}>{subtitle}</Text>
-        </Pressable>
-      </Animated.View>
-    </View>
-  );
-}
+/**
+ * The eight destinations, in grid order.
+ *
+ * A tile no longer carries its own pastel fill. Identity is the accent stripe
+ * and the icon, over one shared material — eight fills at the same value read
+ * as eight equally important things, which is exactly the flatness this
+ * redesign is undoing. Adding a section now means choosing an accent, not
+ * inventing another hue.
+ *
+ * Every key is both a `HubSection` and a `SectionIconKey`, so the icon and the
+ * destination can never drift apart.
+ */
+const HUB_TILES: { key: SectionIconKey & HubSection; title: string; sub: string }[] = [
+  { key: 'habits', title: 'Habits', sub: 'Build routines' },
+  { key: 'mission', title: 'Mission', sub: 'Your direction' },
+  { key: 'reflection', title: 'Reflection', sub: 'Close the day' },
+  { key: 'calendar', title: 'Calendar', sub: 'Track days' },
+  { key: 'todo', title: 'To-Do', sub: 'Quick list' },
+  { key: 'focus', title: 'Focus', sub: 'Start a session' },
+  { key: 'achievements', title: 'Achievements', sub: 'Milestones' },
+  { key: 'resources', title: 'Resources', sub: 'Guides later' },
+];
 
 export default function HabitsTab() {
   const router = useRouter();
@@ -123,6 +107,15 @@ export default function HabitsTab() {
     removeTodo,
     claimAchievement,
   } = useCafeState();
+
+  // Day/night runs off the same `isNightAt()` clock as the town and the cafe,
+  // so walking in from the map at 8pm doesn't hand you a differently-lit room.
+  const m = usePixelMaterial();
+
+  // The pixel font is loaded here rather than in the root layout: `_layout.tsx`
+  // is contended with the greenhouse work, and the hub is so far the only
+  // screen that uses it. This moves up once the rest of the app converts.
+  const [fontLoaded] = useFonts({ [PIXEL_FONT]: PIXEL_FONT_FILE });
 
   const [section, setSection] = useState<HubSection>('hub');
   const [currentDate, setCurrentDate] = useState(new Date());
@@ -265,76 +258,127 @@ export default function HabitsTab() {
     Alert.alert('Reflection logged', `+${option.pearls} pearls`);
   };
 
+  const habitTotal = state.habits.length;
+  const habitsLeft = Math.max(0, habitTotal - doneToday);
+
+  // The three things that can actually be finished today. Everything else in
+  // the hub is a place; these are the day's open loops, which is why they get
+  // to be rows rather than tiles — and why each one is still a way in.
+  const todayRows: { key: SectionIconKey & HubSection; label: string; done: boolean }[] = [
+    {
+      key: 'habits',
+      label:
+        habitTotal === 0
+          ? 'No habits yet'
+          : habitsLeft === 0
+            ? 'All habits done'
+            : `${habitsLeft} habit${habitsLeft === 1 ? '' : 's'} left`,
+      done: habitTotal > 0 && habitsLeft === 0,
+    },
+    {
+      key: 'mission',
+      label: !state.mission.trim()
+        ? 'Write your mission'
+        : missionCheckedInToday
+          ? 'Checked in today'
+          : 'Mission check-in ready',
+      done: missionCheckedInToday,
+    },
+    {
+      key: 'reflection',
+      label: reflectedToday ? 'Reflected today' : 'Reflection waiting',
+      done: reflectedToday,
+    },
+  ];
+
   const renderHub = () => (
     <>
-      <View style={styles.heroCard}>
-        <Text style={styles.heroEyebrow}>Growth Space</Text>
-        <Text style={styles.heroTitle}>Hub</Text>
-        <Text style={styles.heroText}>
-          Tap a button and explore. Everything here is meant to help you organize your life gently.
-        </Text>
-      </View>
+      {/*
+        The today strip leads. The hub's first job is to answer "what is left
+        today"; the hero card it replaces answered nothing and still took the
+        top of the screen.
+      */}
+      <PixelPanel material={m} behind={m.bg} style={pixel.today}>
+        <PixelText size="small" color={m.inkDim}>
+          TODAY
+        </PixelText>
+        <PixelText size="title" color={m.ink} style={pixel.todayTitle}>
+          {habitTotal === 0
+            ? 'Nothing tracked yet'
+            : `${doneToday} of ${habitTotal} habits done`}
+        </PixelText>
+        <PixelProgress
+          value={habitTotal === 0 ? 0 : doneToday / habitTotal}
+          material={m}
+          fill={ACCENTS.habits}
+          style={pixel.todayBar}
+        />
 
-      <View style={styles.hubGrid}>
-        <ThreeDButton
-          title="Habits"
-          subtitle="Build routines"
-          emoji="✓"
-          colorStyle={styles.tilePink}
-          onPress={() => setSection('habits')}
-        />
-        <ThreeDButton
-          title="Mission"
-          subtitle="Your direction"
-          emoji="✦"
-          colorStyle={styles.tileBlue}
-          onPress={() => setSection('mission')}
-        />
-        <ThreeDButton
-          title="Reflection"
-          subtitle={reflectedToday ? 'Done for today' : 'Close the day'}
-          emoji="☾"
-          colorStyle={styles.tileButter}
-          dimmed={reflectedToday}
-          onPress={() => setSection('reflection')}
-        />
-        <ThreeDButton
-          title="Calendar"
-          subtitle="Track days"
-          emoji="☷"
-          colorStyle={styles.tileLavender}
-          onPress={() => setSection('calendar')}
-        />
-        <ThreeDButton
-          title="To-Do"
-          subtitle="Quick list"
-          emoji="☑"
-          colorStyle={styles.tilePeach}
-          onPress={() => setSection('todo')}
-        />
-        <ThreeDButton
-          title="Focus"
-          subtitle="Start a session"
-          emoji="⏱"
-          colorStyle={styles.tileMint}
-          onPress={() => setSection('focus')}
-        />
-        <ThreeDButton
-          title="Achievements"
-          subtitle="Milestones"
-          emoji="🏆"
-          colorStyle={styles.tileGold}
-          onPress={() => setSection('achievements')}
-        />
-        <ThreeDButton
-          title="Resources"
-          subtitle="Guides later"
-          emoji="☰"
-          colorStyle={styles.tileMintAlt}
-          onPress={() => setSection('resources')}
-        />
+        <View style={pixel.todayRows}>
+          {todayRows.map((row) => (
+            <PixelButton
+              key={row.key}
+              material={m}
+              behind={m.face}
+              dimmed={row.done}
+              onPress={() => setSection(row.key)}
+              contentStyle={pixel.todayRow}
+            >
+              <PixelIcon name={row.key} size={24} />
+              <PixelText size="body" color={m.ink} style={pixel.todayRowLabel}>
+                {row.label}
+              </PixelText>
+            </PixelButton>
+          ))}
+        </View>
+      </PixelPanel>
+
+      <View style={pixel.grid}>
+        {HUB_TILES.map((tile) => {
+          const spent = tile.key === 'reflection' && reflectedToday;
+          return (
+            <PixelButton
+              key={tile.key}
+              material={m}
+              behind={m.bg}
+              accent={ACCENTS[tile.key]}
+              dimmed={spent}
+              onPress={() => setSection(tile.key)}
+              style={pixel.tile}
+              contentStyle={pixel.tileFace}
+            >
+              <View style={pixel.tileInner}>
+                <PixelIcon name={tile.key} size={36} style={pixel.tileIcon} />
+                <PixelText size="label" color={m.ink}>
+                  {tile.title}
+                </PixelText>
+                <PixelText size="small" color={m.inkDim} plain>
+                  {spent ? 'Done for today' : tile.sub}
+                </PixelText>
+              </View>
+            </PixelButton>
+          );
+        })}
       </View>
     </>
+  );
+
+  /**
+   * A section's title block. A plain function rather than a component so it
+   * can close over the material without remounting the whole section every
+   * time the material object changes at dusk.
+   */
+  const sectionHead = (title: string, sub?: string) => (
+    <View style={pixel.head}>
+      <PixelText size="title" color={m.ink}>
+        {title}
+      </PixelText>
+      {sub ? (
+        <PixelText size="small" color={m.inkDim} plain style={pixel.headSub}>
+          {sub}
+        </PixelText>
+      ) : null}
+    </View>
   );
 
   const renderHabitTile = (
@@ -345,124 +389,129 @@ export default function HabitsTab() {
     const cap = habit.timesPerDay;
     const full = reps >= cap;
     const streak = getHabitStreak(habit.id);
-    const def = HABIT_TIERS[habit.tier];
 
     return (
-      <Pressable
+      <PixelButton
         key={habit.id}
+        material={m}
+        behind={m.bg}
+        // The habit keeps its own colour, but only as the accent edge — filling
+        // the whole tile with it, as the old one did, meant a logged habit and
+        // an unlogged one differed by their entire surface, and a wall of them
+        // read as confetti rather than as progress.
+        accent={habit.color}
+        dimmed={full}
         onPress={() => handleLogRep(habit)}
         onLongPress={() => router.push(`/habit-form?id=${habit.id}`)}
         delayLongPress={300}
-        style={({ pressed }) => [
-          styles.habitTile,
-          wide ? styles.habitTileWide : styles.habitTileHalf,
-          { borderColor: habit.color },
-          reps > 0 && { backgroundColor: habit.color },
-          full && styles.habitTileFull,
-          pressed && !full && styles.smallPressed,
-        ]}
+        style={wide ? pixel.habitWide : pixel.habitHalf}
+        contentStyle={pixel.habitFace}
       >
-        <View style={styles.habitTileTop}>
-          <Text style={styles.habitTileName} numberOfLines={1}>
+        <View style={pixel.habitInner}>
+          <PixelText size="label" color={m.ink} numberOfLines={1}>
             {habit.name || 'Untitled'}
-          </Text>
-          {full && <Text style={styles.habitTileCheck}>✓</Text>}
-        </View>
+          </PixelText>
 
-        <View style={styles.habitTileBottom}>
-          <View style={styles.repDots}>
-            {Array.from({ length: cap }).map((_, index) => (
-              <View
-                key={index}
-                style={[
-                  styles.repDot,
-                  index < reps ? styles.repDotOn : styles.repDotOff,
-                ]}
-              />
-            ))}
-            {cap > 1 && (
-              <Text style={styles.repCount}>
-                {reps}/{cap}
-              </Text>
-            )}
+          <View style={pixel.habitBottom}>
+            <View style={pixel.dots}>
+              {Array.from({ length: cap }).map((_, index) => (
+                <View
+                  key={index}
+                  style={[
+                    pixel.dot,
+                    { backgroundColor: index < reps ? habit.color : m.track },
+                  ]}
+                />
+              ))}
+              {cap > 1 ? (
+                <PixelText size="small" color={m.inkDim} style={pixel.dotCount}>
+                  {reps}/{cap}
+                </PixelText>
+              ) : null}
+            </View>
+
+            <PixelText size="small" color={m.inkDim}>
+              {streak > 0
+                ? `${streak}d`
+                : `+${pearlsForRep(habit.tier, habit.timesPerDay, reps + 1)}`}
+            </PixelText>
           </View>
-
-          <Text style={styles.habitTileMeta}>
-            {streak > 0
-              ? `${streak}d`
-              : `+${pearlsForRep(habit.tier, habit.timesPerDay, reps + 1)}`}
-          </Text>
         </View>
-      </Pressable>
+      </PixelButton>
     );
   };
 
   const renderHabits = () => (
     <>
-      <View style={styles.todayCard}>
-        <View style={styles.todayTopRow}>
-          <Text style={styles.todayTitle}>Today</Text>
-          <Text style={styles.todayCount}>
+      {sectionHead('Habits', 'Tap a tile to log a rep. Hold to edit.')}
+
+      <PixelPanel material={m} behind={m.bg} style={pixel.card}>
+        <View style={pixel.rowBetween}>
+          <PixelText size="label" color={m.ink}>
+            Today
+          </PixelText>
+          <PixelText size="small" color={m.inkDim}>
             {doneToday} of {state.habits.length} done
-          </Text>
+          </PixelText>
         </View>
 
-        <View style={styles.progressTrack}>
-          <View
-            style={[
-              styles.progressFill,
-              {
-                width: `${
-                  state.habits.length
-                    ? Math.round((doneToday / state.habits.length) * 100)
-                    : 0
-                }%`,
-              },
-            ]}
-          />
-        </View>
+        <PixelProgress
+          value={state.habits.length ? doneToday / state.habits.length : 0}
+          material={m}
+          fill={ACCENTS.habits}
+          style={pixel.cardBar}
+        />
 
-        <Pressable
+        <PixelButton
+          material={m}
+          behind={m.face}
           onPress={() => setPartialCountsAsDone(!state.preferences.partialCountsAsDone)}
-          style={({ pressed }) => [styles.prefRow, pressed && styles.smallPressed]}
+          contentStyle={pixel.prefRow}
         >
-          <View
-            style={[
-              styles.prefCheck,
-              state.preferences.partialCountsAsDone && styles.prefCheckOn,
-            ]}
+          {/* A filled well rather than a tick glyph — the pixel font has no
+              checkmark, and a drawn one at this size is four pixels of mush. */}
+          <PixelPanel
+            material={m}
+            sunken
+            inset
+            bevel={BEVEL_THIN}
+            style={pixel.checkBox}
           >
-            {state.preferences.partialCountsAsDone && (
-              <Text style={styles.prefCheckMark}>✓</Text>
-            )}
-          </View>
-          <Text style={styles.prefLabel}>
+            {state.preferences.partialCountsAsDone ? (
+              <View style={[pixel.checkFill, { backgroundColor: ACCENTS.habits }]} />
+            ) : null}
+          </PixelPanel>
+          <PixelText size="small" color={m.ink} style={pixel.prefLabel}>
             Count partial progress as done
-          </Text>
-        </Pressable>
-      </View>
+          </PixelText>
+        </PixelButton>
+      </PixelPanel>
 
       {state.habits.length === 0 && (
-        <View style={styles.emptyCard}>
-          <Text style={styles.emptyTitle}>Start with one</Text>
-          <Text style={styles.emptyBody}>
+        <PixelPanel material={m} behind={m.bg} style={pixel.card}>
+          <PixelText size="label" color={m.ink}>
+            Start with one
+          </PixelText>
+          <PixelText size="small" color={m.inkDim} plain style={pixel.cardBody}>
             Pick the single habit that would change the most if you actually did it
             every day. You can add more later.
-          </Text>
-        </View>
+          </PixelText>
+        </PixelPanel>
       )}
 
       {habitsByTier.map((group) => (
-        <View key={group.tier} style={styles.tierSection}>
-          <View style={styles.tierHeader}>
-            <Text style={styles.tierHeaderLabel}>{group.def.label}</Text>
-            <Text style={styles.tierHeaderPearls}>
+        <View key={group.tier} style={pixel.tierSection}>
+          <View style={pixel.rowBetween}>
+            <PixelText size="small" color={m.ink}>
+              {group.def.label}
+            </PixelText>
+            <PixelText size="small" color={m.inkDim}>
               {group.def.pearls} pearls
               {group.def.rewardModel === 'budget' ? '/day' : ' each'}
-            </Text>
+            </PixelText>
           </View>
 
-          <View style={styles.tileGrid}>
+          <View style={pixel.habitGrid}>
             {group.habits.map((habit) =>
               renderHabitTile(habit, group.tier === 'keystone')
             )}
@@ -470,215 +519,252 @@ export default function HabitsTab() {
         </View>
       ))}
 
-      <Pressable
+      <PixelButton
+        material={m}
+        behind={m.bg}
+        accent={ACCENTS.habits}
         onPress={() => router.push('/habit-form')}
-        style={({ pressed }) => [styles.createHabitButton, pressed && styles.bigPressed]}
+        style={pixel.wideAction}
+        contentStyle={pixel.wideActionFace}
       >
-        <Text style={styles.createHabitButtonText}>+ New habit</Text>
-      </Pressable>
-
-      <Text style={styles.hintText}>
-        Tap a tile to log a rep. Hold to edit.
-      </Text>
+        <PixelText size="label" color={m.ink}>
+          + New habit
+        </PixelText>
+      </PixelButton>
     </>
   );
 
   const renderMission = () => (
-    <View style={styles.sectionCard}>
-      <Text style={styles.sectionHeader}>Mission</Text>
-      <Text style={styles.sectionSubheader}>
-        Come back here daily and check in with your direction.
-      </Text>
+    <>
+      {sectionHead('Mission', 'Come back here daily and check in with your direction.')}
 
-      <TextInput
-        value={missionDraft}
-        onChangeText={setMissionDraft}
-        placeholder="Write your mission statement..."
-        placeholderTextColor="#9A8D95"
-        multiline
-        numberOfLines={5}
-        style={styles.missionInput}
-      />
+      <PixelPanel material={m} behind={m.bg} style={pixel.card}>
+        {/* The input is a sunken well: text you type into should look like a
+            hole in the surface, not another raised panel. */}
+        <PixelPanel material={m} inset sunken bevel={BEVEL_THIN} style={pixel.inputWell}>
+          <TextInput
+            value={missionDraft}
+            onChangeText={setMissionDraft}
+            placeholder="Write your mission statement..."
+            placeholderTextColor={m.inkDim}
+            multiline
+            numberOfLines={5}
+            style={[pixel.input, { color: m.ink }]}
+          />
+        </PixelPanel>
 
-      <Pressable
-        onPress={handleSaveMission}
-        disabled={!hasPendingMissionEdit}
-        style={({ pressed }) => [
-          styles.primaryBigButton,
-          !hasPendingMissionEdit && styles.dimmedButton,
-          pressed && styles.bigPressed,
-        ]}
-      >
-        <Text style={styles.primaryBigButtonText}>Save Mission</Text>
-      </Pressable>
+        <PixelButton
+          material={m}
+          behind={m.face}
+          accent={ACCENTS.mission}
+          onPress={handleSaveMission}
+          disabled={!hasPendingMissionEdit}
+          dimmed={!hasPendingMissionEdit}
+          style={pixel.wideAction}
+          contentStyle={pixel.wideActionFace}
+        >
+          <PixelText size="label" color={m.ink}>
+            Save Mission
+          </PixelText>
+        </PixelButton>
 
-      <Pressable
-        onPress={handleMissionCheckIn}
-        disabled={!canCheckInMissionToday}
-        style={({ pressed }) => [
-          styles.secondaryBigButton,
-          !canCheckInMissionToday && styles.dimmedButton,
-          pressed && styles.bigPressed,
-        ]}
-      >
-        <Text style={styles.secondaryBigButtonText}>
-          {missionCheckedInToday
-            ? 'Already checked in today'
-            : 'Daily Check-In (+25 pearls)'}
-        </Text>
-      </Pressable>
-    </View>
+        <PixelButton
+          material={m}
+          behind={m.face}
+          onPress={handleMissionCheckIn}
+          disabled={!canCheckInMissionToday}
+          dimmed={!canCheckInMissionToday}
+          style={pixel.wideActionLast}
+          contentStyle={pixel.wideActionFace}
+        >
+          <PixelText size="label" color={m.ink}>
+            {missionCheckedInToday
+              ? 'Already checked in today'
+              : 'Daily Check-In (+25 pearls)'}
+          </PixelText>
+        </PixelButton>
+      </PixelPanel>
+    </>
   );
 
   const renderReflection = () => (
-    <View style={styles.sectionCard}>
-      <Text style={styles.sectionHeader}>Daily Reflection</Text>
-      <Text style={styles.sectionSubheader}>
-        One honest question a day. It changes every morning, and answering pays
-        out once.
-      </Text>
+    <>
+      {sectionHead(
+        'Daily Reflection',
+        'One honest question a day. It changes every morning, and answering pays out once.'
+      )}
 
-      <View style={[styles.reflectionPromptCard, reflectedToday && styles.dimmedButton]}>
-        <Text style={styles.reflectionQuestion}>{reflectionPrompt.question}</Text>
+      <PixelPanel material={m} behind={m.bg} style={pixel.card}>
+        <PixelText size="label" color={m.ink} style={pixel.question}>
+          {reflectionPrompt.question}
+        </PixelText>
 
-        {reflectionPrompt.options.map((option) => (
-          <Pressable
-            key={option.id}
-            onPress={() => handleReflectionAnswer(option)}
-            disabled={reflectedToday}
-            style={({ pressed }) => [
-              styles.reflectionOption,
-              pressed && !reflectedToday && styles.smallPressed,
-            ]}
-          >
-            <Text style={styles.reflectionOptionText}>{option.label}</Text>
-            <Text style={styles.reflectionOptionPearls}>+{option.pearls}</Text>
-          </Pressable>
-        ))}
-      </View>
+        <View style={pixel.optionList}>
+          {reflectionPrompt.options.map((option) => (
+            <PixelButton
+              key={option.id}
+              material={m}
+              behind={m.face}
+              onPress={() => handleReflectionAnswer(option)}
+              disabled={reflectedToday}
+              dimmed={reflectedToday}
+              contentStyle={pixel.option}
+            >
+              <PixelText size="small" color={m.ink} style={pixel.optionLabel}>
+                {option.label}
+              </PixelText>
+              <PixelText size="small" color={m.inkDim}>
+                +{option.pearls}
+              </PixelText>
+            </PixelButton>
+          ))}
+        </View>
 
-      <Text style={styles.reflectionFootnote}>
-        {reflectedToday
-          ? 'Already reflected today — a new question lands tomorrow.'
-          : 'Pick the one that is true, not the one worth the most.'}
-      </Text>
-    </View>
+        <PixelText size="small" color={m.inkDim} plain style={pixel.cardBody}>
+          {reflectedToday
+            ? 'Already reflected today — a new question lands tomorrow.'
+            : 'Pick the one that is true, not the one worth the most.'}
+        </PixelText>
+      </PixelPanel>
+    </>
+  );
+
+  const renderCalendarStat = (label: string, value: string | number) => (
+    <PixelPanel material={m} inset sunken bevel={BEVEL_THIN} style={pixel.statCell}>
+      <PixelText size="small" color={m.inkDim}>
+        {label}
+      </PixelText>
+      <PixelText size="title" color={m.ink}>
+        {value}
+      </PixelText>
+    </PixelPanel>
   );
 
   const renderCalendar = () => (
     <>
-      <View style={styles.calendarTopBar}>
-        <Pressable
+      <View style={pixel.monthBar}>
+        {/* ASCII chevrons, not arrow glyphs: the pixel face covers Latin and
+            punctuation, and a missing glyph falls back to the system font
+            mid-line, which is more obvious than a plainer arrow. */}
+        <PixelButton
+          material={m}
+          behind={m.bg}
           onPress={handlePrevMonth}
-          style={({ pressed }) => [styles.monthArrow, pressed && styles.smallPressed]}
+          contentStyle={pixel.monthArrow}
         >
-          <Text style={styles.monthArrowText}>←</Text>
-        </Pressable>
+          <PixelText size="label" color={m.ink}>
+            {'<'}
+          </PixelText>
+        </PixelButton>
 
-        <Text style={styles.monthTitle}>{monthName}</Text>
+        <PixelText size="title" color={m.ink}>
+          {monthName}
+        </PixelText>
 
-        <Pressable
+        <PixelButton
+          material={m}
+          behind={m.bg}
           onPress={handleNextMonth}
-          style={({ pressed }) => [styles.monthArrow, pressed && styles.smallPressed]}
+          contentStyle={pixel.monthArrow}
         >
-          <Text style={styles.monthArrowText}>→</Text>
-        </Pressable>
+          <PixelText size="label" color={m.ink}>
+            {'>'}
+          </PixelText>
+        </PixelButton>
       </View>
 
-      <View style={styles.calendarShell}>
-        <View style={styles.weekdayHeader}>
-          {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day) => (
-            <Text key={day} style={styles.weekdayText}>
+      <PixelPanel material={m} behind={m.bg} style={pixel.card}>
+        <View style={pixel.weekRow}>
+          {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((day, index) => (
+            <PixelText
+              key={`${day}-${index}`}
+              size="small"
+              color={m.inkDim}
+              style={pixel.weekday}
+            >
               {day}
-            </Text>
+            </PixelText>
           ))}
         </View>
 
-        <View style={styles.daysGrid}>
-          {calendarDays.map((day, index) => (
-            <Pressable
-              key={index}
-              onPress={() => day && setSelectedDateKey(day.dateKey)}
-              style={({ pressed }) => [
-                styles.dayCell,
-                day && day.isToday && styles.todayCell,
-                day && selectedDateKey === day.dateKey && styles.selectedCell,
-                !day && styles.emptyCell,
-                pressed && day && styles.smallPressed,
-              ]}
-            >
-              {day ? (
-                <>
-                  <Text
+        <View style={pixel.daysGrid}>
+          {calendarDays.map((day, index) => {
+            const selected = !!day && selectedDateKey === day.dateKey;
+            const logged = !!day && day.completedHabitIds.length > 0;
+            return (
+              <Pressable
+                key={index}
+                onPress={() => day && setSelectedDateKey(day.dateKey)}
+                style={pixel.dayCell}
+              >
+                {day ? (
+                  <View
                     style={[
-                      styles.dayNumber,
-                      day.isToday && styles.todayNumber,
+                      pixel.dayFace,
+                      {
+                        backgroundColor: selected
+                          ? ACCENTS.calendar
+                          : logged
+                            ? m.face
+                            : m.sunk,
+                      },
+                      // Today is marked by an edge, not a fill, so it survives
+                      // being selected and being logged at the same time.
+                      day.isToday && { borderWidth: PX, borderColor: m.ink },
                     ]}
                   >
-                    {day.date}
-                  </Text>
-
-                  {day.completedHabitIds.length > 0 && (
-                    <Text style={styles.dayCount}>
-                      {day.completedHabitIds.length}
-                    </Text>
-                  )}
-                </>
-              ) : null}
-            </Pressable>
-          ))}
+                    <PixelText size="small" color={selected ? m.faceLt : m.ink}>
+                      {day.date}
+                    </PixelText>
+                    {logged ? (
+                      <View
+                        style={[
+                          pixel.dayBar,
+                          { backgroundColor: selected ? m.faceLt : ACCENTS.calendar },
+                        ]}
+                      />
+                    ) : null}
+                  </View>
+                ) : null}
+              </Pressable>
+            );
+          })}
         </View>
-      </View>
+      </PixelPanel>
 
       {selectedDayData && (
-        <View style={styles.detailsCard}>
-          <Text style={styles.sectionHeader}>{selectedDayData.dateKey}</Text>
+        <PixelPanel material={m} behind={m.bg} style={pixel.card}>
+          <PixelText size="label" color={m.ink} style={pixel.question}>
+            {selectedDayData.dateKey}
+          </PixelText>
 
-          <View style={styles.calendarStatGrid}>
-            <View style={styles.calendarStatCard}>
-              <Text style={styles.calendarStatLabel}>Habits</Text>
-              <Text style={styles.calendarStatValue}>
-                {selectedDayData.completedHabitIds.length}
-              </Text>
-            </View>
-
-            <View style={styles.calendarStatCard}>
-              <Text style={styles.calendarStatLabel}>Mission</Text>
-              <Text style={styles.calendarStatValue}>
-                {state.dailyStats[selectedDayData.dateKey]?.missionCheckedIn ? 'Yes' : 'No'}
-              </Text>
-            </View>
-
-            <View style={styles.calendarStatCard}>
-              <Text style={styles.calendarStatLabel}>Coins</Text>
-              <Text style={styles.calendarStatValue}>
-                {state.dailyStats[selectedDayData.dateKey]?.coinsEarned ?? 0}
-              </Text>
-            </View>
-
-            <View style={styles.calendarStatCard}>
-              <Text style={styles.calendarStatLabel}>Drinks Made</Text>
-              <Text style={styles.calendarStatValue}>
-                {state.dailyStats[selectedDayData.dateKey]?.drinksMade ?? 0}
-              </Text>
-            </View>
-
-            <View style={styles.calendarStatCard}>
-              <Text style={styles.calendarStatLabel}>Drinks Served</Text>
-              <Text style={styles.calendarStatValue}>
-                {state.dailyStats[selectedDayData.dateKey]?.drinksServed ?? 0}
-              </Text>
-            </View>
-
-            <View style={styles.calendarStatCard}>
-              <Text style={styles.calendarStatLabel}>Pearls</Text>
-              <Text style={styles.calendarStatValue}>
-                {state.dailyStats[selectedDayData.dateKey]?.pearlsEarned ?? 0}
-              </Text>
-            </View>
+          <View style={pixel.statGrid}>
+            {renderCalendarStat('Habits', selectedDayData.completedHabitIds.length)}
+            {renderCalendarStat(
+              'Mission',
+              state.dailyStats[selectedDayData.dateKey]?.missionCheckedIn ? 'Yes' : 'No'
+            )}
+            {renderCalendarStat(
+              'Coins',
+              state.dailyStats[selectedDayData.dateKey]?.coinsEarned ?? 0
+            )}
+            {renderCalendarStat(
+              'Made',
+              state.dailyStats[selectedDayData.dateKey]?.drinksMade ?? 0
+            )}
+            {renderCalendarStat(
+              'Served',
+              state.dailyStats[selectedDayData.dateKey]?.drinksServed ?? 0
+            )}
+            {renderCalendarStat(
+              'Pearls',
+              state.dailyStats[selectedDayData.dateKey]?.pearlsEarned ?? 0
+            )}
           </View>
 
-          <Text style={styles.sectionSubheader}>Completed habits that day</Text>
+          <PixelText size="small" color={m.inkDim} style={pixel.listHead}>
+            Completed habits that day
+          </PixelText>
 
           {state.habits
             .filter((habit) => selectedDayData.completedHabitIds.includes(habit.id))
@@ -686,69 +772,108 @@ export default function HabitsTab() {
               const reps =
                 state.habitLogs[selectedDayData.dateKey]?.[habit.id] ?? 0;
               return (
-                <View key={habit.id} style={styles.calendarHabitRow}>
-                  <Text style={styles.calendarHabitName}>{habit.name}</Text>
-                  <Text style={styles.calendarHabitTag}>
+                <PixelPanel
+                  key={habit.id}
+                  material={m}
+                  inset
+                  sunken
+                  bevel={BEVEL_THIN}
+                  style={pixel.listRow}
+                >
+                  <PixelText size="small" color={m.ink} style={pixel.optionLabel}>
+                    {habit.name}
+                  </PixelText>
+                  <PixelText size="small" color={m.inkDim}>
                     {reps}/{habit.timesPerDay} · {HABIT_TIERS[habit.tier].label}
-                  </Text>
-                </View>
+                  </PixelText>
+                </PixelPanel>
               );
             })}
-        </View>
+        </PixelPanel>
       )}
     </>
   );
 
   const renderTodo = () => (
-    <View style={styles.sectionCard}>
-      <Text style={styles.sectionHeader}>To-Do List</Text>
-      <Text style={styles.sectionSubheader}>
-        A soft place for quick tasks that do not need to become full habits.
-      </Text>
+    <>
+      {sectionHead(
+        'To-Do List',
+        'A soft place for quick tasks that do not need to become full habits.'
+      )}
 
-      <View style={styles.todoComposer}>
-        <TextInput
-          value={todoInput}
-          onChangeText={setTodoInput}
-          placeholder="Add a to-do..."
-          placeholderTextColor="#9A8D95"
-          style={styles.todoInput}
-        />
-        <Pressable
-          onPress={() => {
-            addTodo(todoInput);
-            setTodoInput('');
-          }}
-          style={({ pressed }) => [styles.todoAddButton, pressed && styles.smallPressed]}
-        >
-          <Text style={styles.todoAddText}>Add</Text>
-        </Pressable>
-      </View>
-
-      {state.todos.map((todo) => (
-        <View key={todo.id} style={styles.todoRow}>
-          <Pressable
-            onPress={() => toggleTodo(todo.id)}
-            style={({ pressed }) => [styles.todoCheckWrap, pressed && styles.smallPressed]}
+      <PixelPanel material={m} behind={m.bg} style={pixel.card}>
+        <View style={pixel.composer}>
+          <PixelPanel
+            material={m}
+            inset
+            sunken
+            bevel={BEVEL_THIN}
+            style={pixel.composerWell}
           >
-            <Text style={[styles.todoCheck, todo.done && styles.todoCheckDone]}>
-              {todo.done ? '✓' : '○'}
-            </Text>
-          </Pressable>
+            <TextInput
+              value={todoInput}
+              onChangeText={setTodoInput}
+              placeholder="Add a to-do..."
+              placeholderTextColor={m.inkDim}
+              onSubmitEditing={() => {
+                addTodo(todoInput);
+                setTodoInput('');
+              }}
+              style={[pixel.inputLine, { color: m.ink }]}
+            />
+          </PixelPanel>
 
-          <Text style={[styles.todoText, todo.done && styles.todoTextDone]}>
-            {todo.text}
-          </Text>
-
-          <Pressable
-            onPress={() => removeTodo(todo.id)}
-            style={({ pressed }) => [styles.todoDeleteChip, pressed && styles.smallPressed]}
+          <PixelButton
+            material={m}
+            behind={m.face}
+            accent={ACCENTS.todo}
+            onPress={() => {
+              addTodo(todoInput);
+              setTodoInput('');
+            }}
+            contentStyle={pixel.addButton}
           >
-            <Text style={styles.todoDeleteText}>Delete</Text>
-          </Pressable>
+            <PixelText size="label" color={m.ink}>
+              Add
+            </PixelText>
+          </PixelButton>
         </View>
-      ))}
-    </View>
+
+        {state.todos.map((todo) => (
+          <View key={todo.id} style={pixel.todoRow}>
+            <PixelButton
+              material={m}
+              behind={m.face}
+              onPress={() => toggleTodo(todo.id)}
+              contentStyle={pixel.todoCheck}
+            >
+              {todo.done ? (
+                <View style={[pixel.checkFill, { backgroundColor: ACCENTS.todo }]} />
+              ) : null}
+            </PixelButton>
+
+            <PixelText
+              size="small"
+              color={todo.done ? m.inkDim : m.ink}
+              style={[pixel.todoText, todo.done && pixel.todoTextDone]}
+            >
+              {todo.text}
+            </PixelText>
+
+            <PixelButton
+              material={m}
+              behind={m.face}
+              onPress={() => removeTodo(todo.id)}
+              contentStyle={pixel.todoDelete}
+            >
+              <PixelText size="small" color={m.inkDim}>
+                Delete
+              </PixelText>
+            </PixelButton>
+          </View>
+        ))}
+      </PixelPanel>
+    </>
   );
 
   const achievementCheckState = useMemo((): AchievementCheckState => {
@@ -856,207 +981,190 @@ export default function HabitsTab() {
     const claimable = ach.earned && !ach.claimed;
 
     return (
-      <Pressable
+      <PixelButton
         key={ach.id}
+        material={m}
+        behind={m.bg}
+        // Earned badges take their category's edge as the accent; locked ones
+        // get no stripe at all, so a category reads as a run of colour that
+        // fills in as you earn it.
+        accent={ach.earned ? theme.edge : undefined}
+        dimmed={!ach.earned}
         onPress={
           claimable
             ? () => handleClaimAchievement(ach.id, ach.pearlReward)
             : undefined
         }
         disabled={!claimable}
-        style={({ pressed }) => [
-          styles.achCard,
-          ach.earned
-            ? {
-                backgroundColor: theme.tint,
-                borderColor: theme.edge,
-                shadowColor: theme.edge,
-              }
-            : styles.achCardLocked,
-          ach.earned && styles.achCardEarned,
-          ach.claimed && styles.achCardClaimed,
-          pressed && claimable && styles.smallPressed,
-        ]}
+        style={pixel.achRow}
+        contentStyle={pixel.achFace}
       >
-        <View
-          style={[
-            styles.achIconWrap,
-            ach.earned && { backgroundColor: 'rgba(255,255,255,0.72)', borderColor: theme.edge },
-          ]}
-        >
-          {/* A ghosted version of the real icon reads better than a padlock —
-              it shows what you're working toward instead of hiding it. */}
-          <Text style={[styles.achEmoji, !ach.earned && styles.achEmojiLocked]}>
-            {ach.emoji}
-          </Text>
-        </View>
-
-        <View style={styles.achInfo}>
-          <Text
-            style={[styles.achTitle, ach.earned && { color: theme.ink }]}
-            numberOfLines={1}
+        <View style={pixel.achInner}>
+          <PixelPanel
+            material={m}
+            inset
+            sunken
+            bevel={BEVEL_THIN}
+            style={pixel.achIconWell}
           >
-            {ach.title}
-          </Text>
-          <Text
-            style={[styles.achDesc, ach.earned && { color: theme.ink, opacity: 0.72 }]}
-            numberOfLines={2}
-          >
-            {ach.description}
-          </Text>
-        </View>
-
-        {claimable ? (
-          <View style={styles.achClaimPill}>
-            <Text style={styles.achClaimPillText}>+{ach.pearlReward}</Text>
-          </View>
-        ) : ach.claimed ? (
-          <View style={styles.achDoneWrap}>
-            <Text style={styles.achDoneCheck}>✓</Text>
-            <Text style={[styles.achDoneLabel, { color: theme.ink }]}>
-              +{ach.pearlReward}
+            {/* A ghosted version of the real icon reads better than a padlock —
+                it shows what you're working toward instead of hiding it. */}
+            <Text style={[pixel.achEmoji, !ach.earned && pixel.achEmojiLocked]}>
+              {ach.emoji}
             </Text>
+          </PixelPanel>
+
+          <View style={pixel.achInfo}>
+            <PixelText
+              size="small"
+              color={ach.earned ? m.ink : m.inkDim}
+              numberOfLines={1}
+            >
+              {ach.title}
+            </PixelText>
+            <PixelText size="small" color={m.inkDim} plain numberOfLines={2}>
+              {ach.description}
+            </PixelText>
           </View>
-        ) : (
-          <Text style={styles.achRewardPreview}>+{ach.pearlReward}</Text>
-        )}
-      </Pressable>
+
+          {claimable ? (
+            <PixelChip
+              label={`+${ach.pearlReward}`}
+              material={m}
+              tint={ACCENTS.calendar}
+              color={m.faceLt}
+            />
+          ) : (
+            <PixelText size="small" color={m.inkDim}>
+              +{ach.pearlReward}
+            </PixelText>
+          )}
+        </View>
+      </PixelButton>
     );
   };
 
   const renderAchievements = () => (
     <>
-      <View style={styles.achHero}>
-        <Text style={styles.achHeroEyebrow}>Milestones</Text>
+      {sectionHead(
+        'Achievements',
+        achievementState.readyToClaim > 0
+          ? `${achievementState.readyToClaim} ready to claim — tap to collect.`
+          : 'Earned badges pay out pearls. Keep showing up.'
+      )}
 
-        <View style={styles.achHeroRow}>
-          <Text style={styles.achHeroTitle}>Achievements</Text>
-          <Text style={styles.achHeroCount}>
+      <PixelPanel material={m} behind={m.bg} style={pixel.card}>
+        <View style={pixel.rowBetween}>
+          <PixelText size="label" color={m.ink}>
+            Earned
+          </PixelText>
+          <PixelText size="label" color={m.ink}>
             {achievementState.totalEarned}
-            <Text style={styles.achHeroCountTotal}>/{achievementState.total}</Text>
-          </Text>
+            <PixelText size="label" color={m.inkDim}>
+              /{achievementState.total}
+            </PixelText>
+          </PixelText>
         </View>
 
-        <View style={styles.achProgressTrack}>
-          <View
-            style={[
-              styles.achProgressFill,
-              {
-                width: `${Math.round(
-                  (achievementState.totalEarned / achievementState.total) * 100
-                )}%`,
-              },
-            ]}
-          />
-        </View>
-
-        <Text style={styles.achHeroFoot}>
-          {achievementState.readyToClaim > 0
-            ? `${achievementState.readyToClaim} ready to claim — tap to collect.`
-            : 'Earned badges pay out pearls. Keep showing up.'}
-        </Text>
-      </View>
+        <PixelProgress
+          value={achievementState.totalEarned / achievementState.total}
+          material={m}
+          fill={ACCENTS.achievements}
+          style={pixel.cardBar}
+        />
+      </PixelPanel>
 
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
-        style={styles.achFilterScroll}
-        contentContainerStyle={styles.achFilterRow}
+        style={pixel.filterScroll}
+        contentContainerStyle={pixel.filterRow}
       >
-        <Pressable
+        <PixelButton
+          material={m}
+          behind={m.bg}
           onPress={() => setAchFilter('all')}
-          style={({ pressed }) => [
-            styles.achFilterChip,
-            achFilter === 'all' && styles.achFilterChipActive,
-            pressed && styles.smallPressed,
-          ]}
+          contentStyle={pixel.filterChip}
+          dimmed={achFilter !== 'all'}
         >
-          <Text
-            style={[
-              styles.achFilterText,
-              achFilter === 'all' && styles.achFilterTextActive,
-            ]}
-          >
+          <PixelText size="small" color={m.ink}>
             All
-          </Text>
-        </Pressable>
+          </PixelText>
+        </PixelButton>
 
         {ACHIEVEMENT_CATEGORIES.map((cat) => (
-          <Pressable
+          <PixelButton
             key={cat.id}
+            material={m}
+            behind={m.bg}
+            accent={achFilter === cat.id ? cat.edge : undefined}
+            dimmed={achFilter !== cat.id}
             onPress={() => setAchFilter(cat.id)}
-            style={({ pressed }) => [
-              styles.achFilterChip,
-              achFilter === cat.id && {
-                backgroundColor: cat.tint,
-                borderColor: cat.edge,
-                shadowColor: cat.edge,
-              },
-              achFilter === cat.id && styles.achFilterChipActive,
-              pressed && styles.smallPressed,
-            ]}
+            contentStyle={pixel.filterChip}
           >
-            <Text
-              style={[
-                styles.achFilterText,
-                achFilter === cat.id && { color: cat.ink },
-              ]}
-            >
-              {cat.emoji}  {cat.label}
-            </Text>
-          </Pressable>
+            <PixelText size="small" color={m.ink}>
+              {cat.emoji} {cat.label}
+            </PixelText>
+          </PixelButton>
         ))}
       </ScrollView>
 
       {achievementState.groups.map((group) => (
-        <View key={group.cat.id} style={styles.achSection}>
-          <View style={styles.achSectionHeader}>
-            <Text style={styles.achSectionLabel}>{group.cat.label}</Text>
-            <Text style={styles.achSectionCount}>
+        <View key={group.cat.id} style={pixel.tierSection}>
+          <View style={pixel.rowBetween}>
+            <PixelText size="small" color={m.ink}>
+              {group.cat.label}
+            </PixelText>
+            <PixelText size="small" color={m.inkDim}>
               {group.earned} of {group.items.length}
-            </Text>
+            </PixelText>
           </View>
 
-          {group.items.map(renderAchievementRow)}
+          <View style={pixel.achList}>{group.items.map(renderAchievementRow)}</View>
         </View>
       ))}
     </>
   );
 
   const renderResources = () => (
-    <View style={styles.sectionCard}>
-      <Text style={styles.sectionHeader}>Resources</Text>
-      <Text style={styles.sectionSubheader}>
-        This page will hold self-help content later.
-      </Text>
+    <>
+      {sectionHead('Resources', 'This page will hold self-help content later.')}
 
-      <View style={styles.resourceCard}>
-        <Text style={styles.resourceTitle}>Books</Text>
-        <Text style={styles.resourceBody}>Coming soon</Text>
-      </View>
-
-      <View style={styles.resourceCard}>
-        <Text style={styles.resourceTitle}>Articles</Text>
-        <Text style={styles.resourceBody}>Coming soon</Text>
-      </View>
-
-      <View style={styles.resourceCard}>
-        <Text style={styles.resourceTitle}>Frameworks</Text>
-        <Text style={styles.resourceBody}>Coming soon</Text>
-      </View>
-    </View>
+      {['Books', 'Articles', 'Frameworks'].map((title) => (
+        <PixelPanel key={title} material={m} behind={m.bg} style={pixel.card}>
+          <PixelText size="label" color={m.ink}>
+            {title}
+          </PixelText>
+          <PixelText size="small" color={m.inkDim} plain style={pixel.cardBody}>
+            Coming soon
+          </PixelText>
+        </PixelPanel>
+      ))}
+    </>
   );
 
+  // Held until the pixel font is in: swapping it in late reflows every label
+  // and the numbers visibly jump, which on a screen this text-dense reads as a
+  // glitch rather than as loading.
+  if (!fontLoaded) {
+    return <SafeAreaView style={[styles.container, { backgroundColor: m.bg }]} />;
+  }
+
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={[styles.container, { backgroundColor: m.bg }]}>
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
         {section !== 'hub' && (
-          <Pressable
+          <PixelButton
+            material={m}
+            behind={m.bg}
             onPress={() => setSection('hub')}
-            style={({ pressed }) => [styles.backPill, pressed && styles.smallPressed]}
+            style={pixel.back}
+            contentStyle={pixel.backFace}
           >
-            <Text style={styles.backPillText}>← Back to Hub</Text>
-          </Pressable>
+            <PixelText size="small" color={m.inkDim}>
+              {'< Back to Hub'}
+            </PixelText>
+          </PixelButton>
         )}
 
         {section === 'hub' && renderHub()}
@@ -1075,645 +1183,201 @@ export default function HabitsTab() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#FFF6FB',
+/**
+ * Layout for the pixel hub. Colour lives on the material, not in here — it
+ * changes at dusk, and a StyleSheet is frozen at module load.
+ *
+ * Every measurement is a multiple of `PX` so nothing lands on a half art pixel.
+ */
+const pixel = StyleSheet.create({
+  today: {
+    padding: PX * 5,
+    marginBottom: PX * 6,
   },
-  scrollView: {
-    flex: 1,
-    paddingHorizontal: 16,
-    paddingTop: 14,
+  todayTitle: {
+    marginBottom: PX * 3,
   },
-
-  backPill: {
-    alignSelf: 'flex-start',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 999,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderWidth: 1,
-    borderColor: '#E6D8F3',
-    marginBottom: 12,
-    shadowColor: '#B9A6F3',
-    shadowOpacity: 0.3,
-    shadowRadius: 0,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 5,
+  todayBar: {
+    marginBottom: PX * 4,
   },
-  backPillText: {
-    color: '#6D5A7B',
-    fontSize: 13,
-    fontWeight: '700',
+  todayRows: {
+    gap: PX * 2,
+  },
+  todayRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: PX * 2,
+  },
+  todayRowLabel: {
+    marginLeft: PX * 3,
   },
 
-  heroCard: {
-    backgroundColor: '#FFFDFE',
-    borderRadius: 28,
-    padding: 20,
-    borderWidth: 1,
-    borderColor: '#F4D7E9',
-    marginBottom: 14,
-  },
-  heroEyebrow: {
-    fontSize: 11,
-    color: '#B58CAD',
-    textTransform: 'uppercase',
-    letterSpacing: 0.7,
-    marginBottom: 6,
-    fontWeight: '700',
-  },
-  heroTitle: {
-    fontSize: 26,
-    fontWeight: '800',
-    color: '#5B4A63',
-    marginBottom: 8,
-  },
-  heroText: {
-    fontSize: 13,
-    lineHeight: 18,
-    color: '#7A6876',
-  },
-
-  hubGrid: {
+  grid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
+    gap: PX * 5,
     justifyContent: 'space-between',
-    gap: 12,
   },
-  tileShadowLayer: {
-    width: '48%',
-    marginBottom: 4,
+  // Two across with the gap between them. Not a third column: the titles are
+  // set in a pixel font that cannot hyphenate, so "Achievements" needs room.
+  tile: {
+    width: '47%',
   },
   tileFace: {
-    minHeight: 142,
-    borderRadius: 24,
-    paddingHorizontal: 14,
-    paddingVertical: 16,
-    borderWidth: 1.2,
-    justifyContent: 'space-between',
-    shadowOpacity: 0.35,
-    shadowRadius: 0,
-    shadowOffset: { width: 0, height: 7 },
-    elevation: 8,
-    overflow: 'hidden',
+    minHeight: 128,
   },
-  tileGloss: {
-    position: 'absolute',
-    top: 8,
-    left: 10,
-    right: 10,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: 'rgba(255,255,255,0.25)',
+  tileInner: {
+    padding: PX * 4,
   },
-  tilePink: {
-    backgroundColor: '#FFD7EA',
-    borderColor: '#E7A9C8',
-    shadowColor: '#D98FB4',
-  },
-  tileBlue: {
-    backgroundColor: '#CFEAFF',
-    borderColor: '#8FC2E1',
-    shadowColor: '#7DB3D4',
-  },
-  tileLavender: {
-    backgroundColor: '#DDD2FF',
-    borderColor: '#B8A5EF',
-    shadowColor: '#B39CE9',
-  },
-  tilePeach: {
-    backgroundColor: '#FFDDBF',
-    borderColor: '#E8B38E',
-    shadowColor: '#E8B38E',
-  },
-  tileMint: {
-    backgroundColor: '#D9F5EA',
-    borderColor: '#9FD5BF',
-    shadowColor: '#7FC8AB',
-  },
-  tileMintAlt: {
-    backgroundColor: '#DDF8F2',
-    borderColor: '#9FDCCB',
-    shadowColor: '#8ED4BE',
-  },
-  tileButter: {
-    backgroundColor: '#FFF0BE',
-    borderColor: '#E4C983',
-    shadowColor: '#DDBE72',
-  },
-  tileDimmed: {
-    opacity: 0.55,
-  },
-  tileEmoji: {
-    fontSize: 22,
-    color: '#6A596D',
-  },
-  tileTitle: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: '#584B5B',
-    marginBottom: 6,
-  },
-  tileSubtitle: {
-    fontSize: 12,
-    lineHeight: 16,
-    color: '#7C6A76',
+  tileIcon: {
+    marginBottom: PX * 3,
   },
 
-  sectionCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 28,
-    borderWidth: 1,
-    borderColor: '#F1D6E6',
-    padding: 16,
-    marginBottom: 12,
+  head: {
+    marginBottom: PX * 4,
   },
-  sectionHeader: {
-    fontSize: 20,
-    fontWeight: '800',
-    color: '#5A4C60',
-    marginBottom: 8,
-  },
-  sectionSubheader: {
-    fontSize: 13,
-    lineHeight: 18,
-    color: '#7F6C79',
-    marginBottom: 14,
+  headSub: {
+    marginTop: PX,
   },
 
-  todayCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 24,
-    borderWidth: 1,
-    borderColor: '#F1D6E6',
-    padding: 16,
-    marginBottom: 14,
+  card: {
+    padding: PX * 5,
+    marginBottom: PX * 5,
   },
-  todayTopRow: {
+  cardBar: {
+    marginTop: PX * 3,
+  },
+  cardBody: {
+    marginTop: PX * 2,
+  },
+  rowBetween: {
     flexDirection: 'row',
-    alignItems: 'baseline',
+    alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 10,
   },
-  todayTitle: { fontSize: 20, fontWeight: '800', color: '#5A4C60' },
-  todayCount: { fontSize: 12, color: '#8B7682', fontWeight: '700' },
-  progressTrack: {
-    height: 8,
-    backgroundColor: '#F6E7F0',
-    borderRadius: 999,
-    overflow: 'hidden',
-  },
-  progressFill: {
-    height: '100%',
-    backgroundColor: '#ED93B1',
-    borderRadius: 999,
-  },
+
   prefRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    marginTop: 14,
+    padding: PX * 2,
+    marginTop: PX * 4,
   },
-  prefCheck: {
-    width: 20,
-    height: 20,
-    borderRadius: 6,
-    borderWidth: 1.5,
-    borderColor: '#D8CBF8',
-    backgroundColor: '#FFFFFF',
+  prefLabel: {
+    marginLeft: PX * 3,
+  },
+  checkBox: {
+    width: PX * 7,
+    height: PX * 7,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  prefCheckOn: { backgroundColor: '#C8B6F2', borderColor: '#8B73CC' },
-  prefCheckMark: { fontSize: 12, fontWeight: '900', color: '#FFFFFF' },
-  prefLabel: { fontSize: 12, color: '#8B7682', fontWeight: '700' },
+  checkFill: {
+    width: PX * 3,
+    height: PX * 3,
+  },
 
-  emptyCard: {
-    backgroundColor: '#FFF9FC',
-    borderRadius: 22,
-    borderWidth: 1,
-    borderColor: '#F3D9E8',
-    padding: 18,
-    marginBottom: 14,
+  tierSection: {
+    marginBottom: PX * 5,
   },
-  emptyTitle: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: '#5D4E5D',
-    marginBottom: 6,
-  },
-  emptyBody: { fontSize: 13, color: '#8B7682', lineHeight: 19 },
-
-  tierSection: { marginBottom: 16 },
-  tierHeader: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
-    justifyContent: 'space-between',
-    marginBottom: 8,
-    paddingHorizontal: 4,
-  },
-  tierHeaderLabel: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: '#B58CAD',
-    textTransform: 'uppercase',
-    letterSpacing: 0.7,
-  },
-  tierHeaderPearls: { fontSize: 11, color: '#B58CAD', fontWeight: '700' },
-  tileGrid: {
+  habitGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 8,
+    gap: PX * 3,
+    marginTop: PX * 3,
   },
-  habitTile: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 18,
-    borderWidth: 1.5,
-    paddingHorizontal: 12,
-    paddingVertical: 11,
-    minHeight: 66,
-    justifyContent: 'space-between',
+  habitHalf: {
+    width: '48.5%',
   },
-  habitTileWide: { width: '100%' },
-  habitTileHalf: { width: '48.4%' },
-  habitTileFull: { opacity: 0.72 },
-  habitTileTop: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 8,
+  habitWide: {
+    width: '100%',
   },
-  habitTileName: {
-    fontSize: 14,
-    fontWeight: '800',
-    color: '#4E3226',
+  habitFace: {
+    minHeight: PX * 34,
+  },
+  habitInner: {
+    padding: PX * 3,
     flex: 1,
+    justifyContent: 'space-between',
   },
-  habitTileCheck: { fontSize: 14, fontWeight: '900', color: '#4E3226' },
-  habitTileBottom: {
+  habitBottom: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    marginTop: PX * 3,
   },
-  repDots: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  repDot: { width: 8, height: 8, borderRadius: 4 },
-  repDotOn: { backgroundColor: '#4E3226' },
-  repDotOff: { backgroundColor: 'rgba(78,50,38,0.16)' },
-  repCount: {
-    fontSize: 11,
-    color: '#6F5D67',
-    fontWeight: '700',
-    marginLeft: 2,
-  },
-  habitTileMeta: { fontSize: 11, color: '#6F5D67', fontWeight: '700' },
-  hintText: {
-    fontSize: 11,
-    color: '#B58CAD',
-    textAlign: 'center',
-    marginTop: 10,
-    fontWeight: '700',
-  },
-
-  createHabitButton: {
-    backgroundColor: '#BFE3F8',
-    borderColor: '#8FC2E1',
-    borderWidth: 1,
-    borderRadius: 18,
-    paddingVertical: 13,
-    alignItems: 'center',
-    marginTop: 4,
-    shadowColor: '#7DB3D4',
-    shadowOpacity: 0.35,
-    shadowRadius: 0,
-    shadowOffset: { width: 0, height: 6 },
-    elevation: 6,
-  },
-  createHabitButtonText: {
-    color: '#456173',
-    fontWeight: '800',
-    fontSize: 13,
-  },
-
-  creatorInput: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: '#ECD8E6',
-    paddingHorizontal: 12,
-    paddingVertical: 11,
-    fontSize: 13,
-    color: '#5D4E5D',
-    marginBottom: 10,
-  },
-
-  habitCard: {
-    backgroundColor: '#FFF9FC',
-    borderRadius: 22,
-    padding: 14,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: '#F3D9E8',
-  },
-  habitTopRow: {
+  dots: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 10,
+    gap: PX,
   },
-  habitLabel: {
-    fontSize: 12,
-    color: '#9A7E91',
-    fontWeight: '700',
+  dot: {
+    width: PX * 3,
+    height: PX * 3,
   },
-  menuChip: {
-    backgroundColor: '#EEE7FF',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: '#D8CBF8',
-    shadowColor: '#B39CE9',
-    shadowOpacity: 0.3,
-    shadowRadius: 0,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 4,
+  dotCount: {
+    marginLeft: PX * 2,
   },
-  menuChipText: {
-    color: '#6C5A92',
-    fontSize: 11,
-    fontWeight: '700',
+
+  wideAction: {
+    alignSelf: 'stretch',
+    marginBottom: PX * 4,
   },
-  habitMainSurface: {
-    flexDirection: 'row',
-    gap: 10,
+  wideActionFace: {
     alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: '#ECD8E6',
-    padding: 12,
+    paddingVertical: PX * 4,
   },
-  habitCheck: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    borderWidth: 1.2,
-    borderColor: '#A8D7C4',
-    backgroundColor: '#FFFFFF',
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: '#7FC8AB',
-    shadowOpacity: 0.32,
-    shadowRadius: 0,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 4,
+
+  inputWell: {
+    padding: PX * 2,
+    marginBottom: PX * 5,
   },
-  habitCheckText: {
+  input: {
+    minHeight: PX * 40,
     fontSize: 15,
-    fontWeight: '800',
-    color: '#78B89A',
-  },
-  habitInfo: {
-    flex: 1,
-  },
-  habitName: {
-    fontSize: 15,
-    fontWeight: '800',
-    color: '#5D4E5D',
-    marginBottom: 4,
-  },
-  habitMeta: {
-    fontSize: 12,
-    color: '#8B7682',
-    marginBottom: 2,
-  },
-  habitReward: {
-    fontSize: 12,
-    color: '#B0608B',
-    fontWeight: '700',
-    marginTop: 4,
-  },
-
-  miniMenu: {
-    marginTop: 10,
-    gap: 8,
-  },
-  menuButton: {
-    backgroundColor: '#F4F0FF',
-    borderRadius: 14,
-    paddingVertical: 11,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#D8CBF8',
-    shadowColor: '#B39CE9',
-    shadowOpacity: 0.3,
-    shadowRadius: 0,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 4,
-  },
-  menuButtonText: {
-    color: '#6C5A92',
-    fontWeight: '700',
-  },
-  menuDeleteButton: {
-    backgroundColor: '#FFE5EA',
-    borderRadius: 14,
-    paddingVertical: 11,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#F0B7C8',
-    shadowColor: '#D67F99',
-    shadowOpacity: 0.3,
-    shadowRadius: 0,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 4,
-  },
-  menuDeleteButtonText: {
-    color: '#B25570',
-    fontWeight: '700',
-  },
-
-  missionInput: {
-    backgroundColor: '#FFFDFE',
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: '#F4D7E9',
-    minHeight: 130,
-    paddingHorizontal: 14,
-    paddingVertical: 14,
-    textAlignVertical: 'top',
-    color: '#5D4E5D',
-    fontSize: 13,
-    marginBottom: 12,
-  },
-  primaryBigButton: {
-    backgroundColor: '#F0B9D7',
-    borderRadius: 18,
-    paddingVertical: 13,
-    alignItems: 'center',
-    marginBottom: 10,
-    borderWidth: 1,
-    borderColor: '#DB8FB9',
-    shadowColor: '#D98FB4',
-    shadowOpacity: 0.35,
-    shadowRadius: 0,
-    shadowOffset: { width: 0, height: 6 },
-    elevation: 6,
-  },
-  primaryBigButtonText: {
-    color: '#5F3F56',
-    fontSize: 13,
-    fontWeight: '800',
-  },
-  secondaryBigButton: {
-    backgroundColor: '#BFE3F8',
-    borderRadius: 18,
-    paddingVertical: 13,
-    alignItems: 'center',
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: '#8FC2E1',
-    shadowColor: '#7DB3D4',
-    shadowOpacity: 0.35,
-    shadowRadius: 0,
-    shadowOffset: { width: 0, height: 6 },
-    elevation: 6,
-  },
-  secondaryBigButtonText: {
-    color: '#456173',
-    fontSize: 13,
-    fontWeight: '800',
-  },
-
-  addHabitButton: {
-    backgroundColor: '#F4C7DE',
-    borderRadius: 18,
-    paddingVertical: 13,
-    alignItems: 'center',
-    marginTop: 4,
-    borderWidth: 1,
-    borderColor: '#E1AFCB',
-    shadowColor: '#D98FB4',
-    shadowOpacity: 0.35,
-    shadowRadius: 0,
-    shadowOffset: { width: 0, height: 6 },
-    elevation: 6,
-  },
-  addHabitButtonText: {
-    color: '#6A4560',
-    fontWeight: '800',
-    fontSize: 13,
-  },
-
-  reflectionPromptCard: {
-    backgroundColor: '#FFFCF2',
-    borderRadius: 22,
-    borderWidth: 1,
-    borderColor: '#F0E0BB',
-    padding: 14,
-  },
-  reflectionQuestion: {
-    fontSize: 15,
-    fontWeight: '800',
-    color: '#5D4E5D',
     lineHeight: 21,
-    marginBottom: 12,
+    padding: PX * 2,
+    textAlignVertical: 'top',
+    // The mission is prose the user writes, so it stays in the system font —
+    // the pixel face is for labels and numbers, not paragraphs.
+    outlineStyle: 'none',
+  } as any,
+
+  question: {
+    marginBottom: PX * 4,
   },
-  reflectionOption: {
+  optionList: {
+    gap: PX * 2,
+  },
+  option: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: 10,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: '#EBD9AF',
-    paddingHorizontal: 14,
-    paddingVertical: 13,
-    marginBottom: 8,
-    shadowColor: '#DDBE72',
-    shadowOpacity: 0.3,
-    shadowRadius: 0,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 4,
+    padding: PX * 3,
   },
-  reflectionOptionText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#5D4E5D',
+  optionLabel: {
     flex: 1,
+    marginRight: PX * 3,
   },
-  reflectionOptionPearls: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: '#A98A3F',
-  },
-  reflectionFootnote: {
-    fontSize: 11,
-    color: '#B58CAD',
-    fontWeight: '700',
-    textAlign: 'center',
-    marginTop: 12,
+  wideActionLast: {
+    alignSelf: 'stretch',
   },
 
-  calendarTopBar: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 24,
-    borderWidth: 1,
-    borderColor: '#D8EAF8',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    marginBottom: 12,
+  monthBar: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: PX * 4,
   },
   monthArrow: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: '#F2FAFF',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#CBE2F0',
-    shadowColor: '#97C2E7',
-    shadowOpacity: 0.3,
-    shadowRadius: 0,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 4,
+    paddingHorizontal: PX * 4,
+    paddingVertical: PX * 2,
   },
-  monthArrowText: {
-    fontSize: 22,
-    fontWeight: '800',
-    color: '#6C8AA0',
-  },
-  monthTitle: {
-    fontSize: 18,
-    fontWeight: '800',
-    color: '#5A4D60',
-  },
-  calendarShell: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 26,
-    borderWidth: 1,
-    borderColor: '#D8EAF8',
-    paddingVertical: 12,
-    paddingHorizontal: 8,
-    marginBottom: 12,
-  },
-  weekdayHeader: {
+  weekRow: {
     flexDirection: 'row',
-    justifyContent: 'space-around',
-    paddingHorizontal: 4,
-    marginBottom: 8,
+    marginBottom: PX * 2,
   },
-  weekdayText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#8B96A3',
-    width: '14.28%',
+  weekday: {
+    width: `${100 / 7}%`,
     textAlign: 'center',
   },
   daysGrid: {
@@ -1721,356 +1385,126 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
   },
   dayCell: {
-    width: '14.28%',
+    width: `${100 / 7}%`,
     aspectRatio: 1,
-    justifyContent: 'center',
+    padding: PX,
+  },
+  dayFace: {
+    flex: 1,
     alignItems: 'center',
-    borderRadius: 12,
-    marginBottom: 4,
-    backgroundColor: '#F8FBFF',
-    borderWidth: 1,
-    borderColor: '#E2EFF9',
+    justifyContent: 'center',
   },
-  emptyCell: {
-    backgroundColor: 'transparent',
-    borderWidth: 0,
-  },
-  todayCell: {
-    backgroundColor: '#BFE3F8',
-    borderColor: '#BFE3F8',
-  },
-  selectedCell: {
-    backgroundColor: '#F7C9DE',
-    borderColor: '#F7C9DE',
-  },
-  dayNumber: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#5D4E5C',
-  },
-  todayNumber: {
-    color: '#345164',
-  },
-  dayCount: {
-    fontSize: 9,
-    position: 'absolute',
-    bottom: 2,
-    color: '#6A6373',
-    fontWeight: '700',
-  },
-  detailsCard: {
-    backgroundColor: '#FFF9FC',
-    borderRadius: 24,
-    borderWidth: 1,
-    borderColor: '#F3D9E8',
-    padding: 16,
-    marginBottom: 12,
-  },
-  calendarStatGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginBottom: 14,
-  },
-  calendarStatCard: {
-    width: '48%',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: '#ECD8E6',
-    padding: 12,
-  },
-  calendarStatLabel: {
-    fontSize: 11,
-    color: '#8B7682',
-    marginBottom: 4,
-    fontWeight: '700',
-  },
-  calendarStatValue: {
-    fontSize: 16,
-    color: '#5D4E5D',
-    fontWeight: '800',
-  },
-  calendarHabitRow: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: '#ECD8E6',
-    padding: 12,
-    marginBottom: 8,
-  },
-  calendarHabitName: {
-    fontSize: 13,
-    fontWeight: '800',
-    color: '#5D4E5D',
-    marginBottom: 4,
-  },
-  calendarHabitTag: {
-    fontSize: 12,
-    color: '#8B7682',
+  // A bar under the number, not a count: at this cell size a second numeral
+  // competed with the date and neither could be read at a glance.
+  dayBar: {
+    height: PX * 2,
+    width: '55%',
+    marginTop: PX,
   },
 
-  todoComposer: {
+  statGrid: {
     flexDirection: 'row',
-    gap: 8,
-    marginBottom: 12,
+    flexWrap: 'wrap',
+    gap: PX * 2,
+    marginBottom: PX * 4,
   },
-  todoInput: {
+  statCell: {
+    width: '31.5%',
+    padding: PX * 2,
+  },
+  listHead: {
+    marginBottom: PX * 2,
+  },
+  listRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: PX * 2,
+    marginBottom: PX * 2,
+  },
+
+  composer: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: PX * 2,
+    marginBottom: PX * 4,
+  },
+  composerWell: {
     flex: 1,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: '#ECD8E6',
-    paddingHorizontal: 12,
-    paddingVertical: 11,
-    color: '#5D4E5D',
-  },
-  todoAddButton: {
-    backgroundColor: '#CFEAFF',
-    borderRadius: 14,
-    paddingHorizontal: 14,
     justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#8FC2E1',
-    shadowColor: '#7DB3D4',
-    shadowOpacity: 0.35,
-    shadowRadius: 0,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 4,
+    paddingHorizontal: PX * 2,
   },
-  todoAddText: {
-    color: '#456173',
-    fontWeight: '800',
+  inputLine: {
+    fontSize: 15,
+    paddingVertical: PX * 3,
+    outlineStyle: 'none',
+  } as any,
+  addButton: {
+    paddingHorizontal: PX * 5,
+    justifyContent: 'center',
   },
+
   todoRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
-    backgroundColor: '#FFF9FC',
-    borderRadius: 16,
-    padding: 12,
-    marginBottom: 8,
-    borderWidth: 1,
-    borderColor: '#F3D9E8',
-  },
-  todoCheckWrap: {
-    paddingHorizontal: 2,
+    gap: PX * 3,
+    marginBottom: PX * 2,
   },
   todoCheck: {
-    fontSize: 16,
-    color: '#B0608B',
-    fontWeight: '800',
-  },
-  todoCheckDone: {
-    color: '#68A98D',
+    width: PX * 10,
+    height: PX * 10,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   todoText: {
-    fontSize: 13,
-    color: '#5D4E5D',
     flex: 1,
   },
   todoTextDone: {
     textDecorationLine: 'line-through',
   },
-  todoDeleteChip: {
-    backgroundColor: '#FFE5EA',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: '#F0B7C8',
-  },
-  todoDeleteText: {
-    color: '#B25570',
-    fontSize: 11,
-    fontWeight: '700',
+  todoDelete: {
+    paddingHorizontal: PX * 3,
+    paddingVertical: PX * 2,
   },
 
-  resourceCard: {
-    backgroundColor: '#F6FBFF',
-    borderRadius: 18,
-    padding: 14,
-    marginBottom: 10,
-    borderWidth: 1,
-    borderColor: '#DDECF7',
+  filterScroll: {
+    marginBottom: PX * 4,
   },
-  resourceTitle: {
-    fontSize: 14,
-    fontWeight: '800',
-    color: '#4C5E6A',
-    marginBottom: 4,
-  },
-  resourceBody: {
-    fontSize: 12,
-    color: '#80919D',
-  },
-
-  // A deeper amber than tileButter so Achievements doesn't read as a
-  // duplicate of the Reflection tile sitting two rows above it.
-  tileGold: {
-    backgroundColor: '#FFE7A3',
-    borderColor: '#E3C26B',
-    shadowColor: '#D6B052',
-  },
-
-  achHero: {
-    backgroundColor: '#FFFCF2',
-    borderRadius: 28,
-    padding: 20,
-    borderWidth: 1,
-    borderColor: '#F0E0BB',
-    marginBottom: 14,
-  },
-  achHeroEyebrow: {
-    fontSize: 11,
-    color: '#B79A5E',
-    textTransform: 'uppercase',
-    letterSpacing: 0.7,
-    marginBottom: 6,
-    fontWeight: '700',
-  },
-  achHeroRow: {
+  filterRow: {
     flexDirection: 'row',
-    alignItems: 'baseline',
-    justifyContent: 'space-between',
-    marginBottom: 14,
+    gap: PX * 2,
+    paddingRight: PX * 4,
   },
-  achHeroTitle: {
-    fontSize: 26,
-    fontWeight: '800',
-    color: '#5B4A63',
-  },
-  achHeroCount: {
-    fontSize: 22,
-    fontWeight: '900',
-    color: '#A98A3F',
-  },
-  achHeroCountTotal: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#C4AC7A',
-  },
-  achProgressTrack: {
-    height: 10,
-    backgroundColor: '#F4E8CC',
-    borderRadius: 999,
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: '#EADCBB',
-  },
-  achProgressFill: {
-    height: '100%',
-    backgroundColor: '#E7B85C',
-    borderRadius: 999,
-  },
-  achHeroFoot: {
-    fontSize: 12,
-    color: '#9A855F',
-    fontWeight: '700',
-    marginTop: 10,
+  filterChip: {
+    paddingHorizontal: PX * 4,
+    paddingVertical: PX * 2,
+    justifyContent: 'center',
   },
 
-  achFilterScroll: {
-    marginBottom: 16,
-    flexGrow: 0,
-    overflow: 'visible',
+  achList: {
+    marginTop: PX * 3,
+    gap: PX * 2,
   },
-  achFilterRow: {
-    gap: 8,
-    paddingVertical: 4,
-    paddingRight: 4,
+  achRow: {
+    alignSelf: 'stretch',
   },
-  achFilterChip: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 999,
-    paddingHorizontal: 15,
-    paddingVertical: 9,
-    borderWidth: 1,
-    borderColor: '#ECD8E6',
-    shadowColor: '#DCC5D6',
-    shadowOpacity: 0.3,
-    shadowRadius: 0,
-    shadowOffset: { width: 0, height: 3 },
-    elevation: 3,
+  achFace: {
+    minHeight: PX * 22,
   },
-  achFilterChipActive: {
-    shadowOpacity: 0.4,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 4,
-  },
-  achFilterText: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: '#8B7682',
-  },
-  achFilterTextActive: {
-    color: '#7A6230',
-  },
-
-  achSection: { marginBottom: 18 },
-  achSectionHeader: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
-    justifyContent: 'space-between',
-    marginBottom: 8,
-    paddingHorizontal: 4,
-  },
-  achSectionLabel: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: '#B58CAD',
-    textTransform: 'uppercase',
-    letterSpacing: 0.7,
-  },
-  achSectionCount: {
-    fontSize: 11,
-    color: '#B58CAD',
-    fontWeight: '700',
-  },
-
-  achCard: {
+  achInner: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 18,
-    borderWidth: 1.5,
-    borderColor: '#F1E4EC',
-    paddingHorizontal: 13,
-    paddingVertical: 12,
-    marginBottom: 8,
-    minHeight: 68,
+    padding: PX * 3,
+    gap: PX * 3,
   },
-  achCardEarned: {
-    shadowOpacity: 0.35,
-    shadowRadius: 0,
-    shadowOffset: { width: 0, height: 5 },
-    elevation: 5,
-  },
-  achCardLocked: {
-    backgroundColor: '#FDFAFC',
-    borderColor: '#F1E4EC',
-  },
-  // Claimed badges stay coloured but step back, the way a finished habit
-  // tile fades rather than disappearing.
-  achCardClaimed: {
-    opacity: 0.72,
-    shadowOpacity: 0.2,
-    shadowOffset: { width: 0, height: 3 },
-    elevation: 3,
-  },
-  achIconWrap: {
-    width: 42,
-    height: 42,
-    borderRadius: 14,
-    backgroundColor: '#F8F3F6',
+  achIconWell: {
+    width: PX * 16,
+    height: PX * 16,
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#EFE2EB',
   },
   achEmoji: {
-    fontSize: 20,
+    fontSize: 18,
   },
   achEmojiLocked: {
     opacity: 0.28,
@@ -2078,69 +1512,29 @@ const styles = StyleSheet.create({
   achInfo: {
     flex: 1,
   },
-  achTitle: {
-    fontSize: 14,
-    fontWeight: '800',
-    color: '#A2939C',
-    marginBottom: 3,
-  },
-  achDesc: {
-    fontSize: 12,
-    lineHeight: 16,
-    color: '#AC9EA7',
-  },
-  // Pearls are the payout, so the claim pill wears the pearl purple rather
-  // than the gold used for coins.
-  achClaimPill: {
-    backgroundColor: '#C8B6F2',
-    borderRadius: 999,
-    paddingHorizontal: 13,
-    paddingVertical: 7,
-    borderWidth: 1,
-    borderColor: '#8B73CC',
-    shadowColor: '#8B73CC',
-    shadowOpacity: 0.4,
-    shadowRadius: 0,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 4,
-  },
-  achClaimPillText: {
-    fontSize: 13,
-    fontWeight: '800',
-    color: '#FFFFFF',
-  },
-  achDoneWrap: {
-    alignItems: 'center',
-    minWidth: 34,
-  },
-  achDoneCheck: {
-    fontSize: 17,
-    fontWeight: '900',
-    color: '#63B97C',
-  },
-  achDoneLabel: {
-    fontSize: 10,
-    fontWeight: '800',
-    opacity: 0.7,
-    marginTop: 1,
-  },
-  achRewardPreview: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: '#CFC0C9',
-    minWidth: 34,
-    textAlign: 'center',
-  },
 
-  smallPressed: {
-    transform: [{ translateY: 3 }],
+  back: {
+    alignSelf: 'flex-start',
+    marginBottom: PX * 3,
   },
-  bigPressed: {
-    transform: [{ translateY: 5 }],
-    shadowOffset: { width: 0, height: 1 },
-    elevation: 1,
+  backFace: {
+    paddingHorizontal: PX * 4,
+    paddingVertical: PX * 2,
   },
-  dimmedButton: {
-    opacity: 0.45,
+});
+
+/**
+ * What survives of the old sheet. Everything else — eight tile fills, the
+ * rounded cards, the pill buttons, the gloss — was replaced by the pixel kit
+ * and `pixel` above; the container keeps only what the material doesn't set.
+ */
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+  },
+  scrollView: {
+    flex: 1,
+    paddingHorizontal: 16,
+    paddingTop: 14,
   },
 });
