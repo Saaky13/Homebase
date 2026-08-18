@@ -140,11 +140,6 @@ export interface GuideState {
   lastOpenedDate: string | null;
   // highest café level the user has already been congratulated for
   lastAcknowledgedLevel: number;
-  // whether this save has had its already-true one-time "moment" beats spent
-  // without showing them. See `catchUpSeenIds` — without it, any save older
-  // than the guide fires a queue of congratulations for things it did weeks
-  // ago, four seconds apart, on whatever screen happens to be open.
-  caughtUp: boolean;
 }
 
 /**
@@ -311,10 +306,6 @@ const initialState: CafeState = {
     snoozedUntil: null,
     lastOpenedDate: null,
     lastAcknowledgedLevel: 1,
-    // A brand new save has nothing to catch up on; the load path flips this
-    // and finds no matches. It exists so an *older* save only ever runs the
-    // backfill once.
-    caughtUp: false,
   },
   focusSessionActive: false,
   focusTimer: idleFocusTimer(),
