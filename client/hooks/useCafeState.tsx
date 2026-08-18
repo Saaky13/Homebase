@@ -140,6 +140,11 @@ export interface GuideState {
   lastOpenedDate: string | null;
   // highest café level the user has already been congratulated for
   lastAcknowledgedLevel: number;
+  // whether this save has had its already-true one-time "moment" beats spent
+  // without showing them. See `catchUpSeenIds` — without it, any save older
+  // than the guide fires a queue of congratulations for things it did weeks
+  // ago, four seconds apart, on whatever screen happens to be open.
+  caughtUp: boolean;
 }
 
 /**
@@ -306,6 +311,10 @@ const initialState: CafeState = {
     snoozedUntil: null,
     lastOpenedDate: null,
     lastAcknowledgedLevel: 1,
+    // A brand new save has nothing to catch up on; the load path flips this
+    // and finds no matches. It exists so an *older* save only ever runs the
+    // backfill once.
+    caughtUp: false,
   },
   focusSessionActive: false,
   focusTimer: idleFocusTimer(),
@@ -1613,10 +1622,24 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
       const spec = getPlant(speciesId);
       if (!spec) return false;
 
-      let bought = false;
+      // Answer from the mirror, not from inside the updater, for the same
+      // reason `plantSeed` and `adoptCat` do: the caller flashes a message off
+      // this result, and React only runs an updater eagerly while its queue is
+      // empty. With anything else already queued the flag was still false when
+      // we returned it, so a purchase that went through reported "not enough
+      // coins" and charged for the seed anyway.
+      const current = stateRef.current;
+      if (current.level < spec.level || current.coins < spec.cost) return false;
+
+      // Advance the mirror before committing so a second tap in the same frame
+      // prices against the spend already in flight rather than stale coins.
+      // The effect that owns stateRef resyncs it on the next render.
+      stateRef.current = { ...current, coins: current.coins - spec.cost };
+
       commit((prev) => {
+        // `prev` is the authority — the mirror can lag, and React may run this
+        // updater more than once for a single commit.
         if (prev.level < spec.level || prev.coins < spec.cost) return prev;
-        bought = true;
         return {
           ...prev,
           coins: prev.coins - spec.cost,
@@ -1629,7 +1652,7 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
           },
         };
       });
-      return bought;
+      return true;
     },
     [commit]
   );
