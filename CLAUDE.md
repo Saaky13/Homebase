@@ -59,7 +59,7 @@ cat cafe/
     │   ├── _layout.tsx      # root layout (CafeProvider, TopBar, GuideOverlay, Stack)
     │   ├── index.tsx        # TownScreen — the home screen (pixel-art town map)
     │   ├── cafe/index.tsx   # CafeTab — Skia café floor with cats, queue, serve button
-    │   ├── habits/index.tsx # HabitsTab — the "Growth Hub" (~2130 lines, all 8 sections + hub grid)
+    │   ├── habits/index.tsx # HabitsTab — the "Growth Hub" (~1540 lines, all 8 sections + hub grid)
     │   ├── shop/index.tsx   # ShopTab — coin-based shop (flavors, decor, upgrades)
     │   ├── cats/index.tsx   # CatsTab — the Cat Shelter (Adopt + Collection tabs)
     │   └── habit-form.tsx   # modal form for creating/editing habits
@@ -90,6 +90,8 @@ cat cafe/
     │   ├── PopularityMeter.tsx  # Popularity bar shown on the café screen
     │   ├── TopBar.tsx       # Persistent top bar — brand, back button, coin/pearl/level pills
     │   ├── TownMap.tsx      # Pixel-art town map component (canvas-rendered)
+    │   ├── pixel/           # The Growth Hub pixel UI kit — panel, button, icon,
+    │   │                    #   text, progress, chip, and the day/night material hook
     │   ├── cafeConfig.ts    # Café layout constants — 10 table center coordinates
     │   ├── cafePixel.ts     # PixelPainter — the café's rect-only pixel-art primitives
     │   └── cafeRender.ts    # The room — floor, rug, wall, windows, counter, tables, door
@@ -127,6 +129,7 @@ cat cafe/
     │   └── copy-canvaskit.js  # postinstall — stages the CanvasKit WASM payload for web
     │
     ├── assets/
+    │   ├── fonts/           # HandjetBubble.ttf — Handjet baked at ELGR 1 / ELSH 16 / wght 800
     │   ├── cats/            # 8 directional cat PNGs (legacy — no longer referenced)
     │   └── images/          # App icons, splash screen
     │
@@ -774,54 +777,100 @@ includes `/habits` AND that `state.guideContext === 'habits:${section}'`.
 
 ## Growth Hub sections (app/habits/index.tsx)
 
-The Growth Hub is a single screen (~2130 lines) with a local `section` state:
+The Growth Hub is a single screen (~1540 lines) with a local `section` state:
 
 ```typescript
 type HubSection = 'hub' | 'habits' | 'mission' | 'reflection' | 'focus'
                 | 'calendar' | 'resources' | 'todo' | 'achievements';
 ```
 
-### Hub tile grid
+### The pixel UI kit (components/pixel/ + constants/pixelTheme.ts + constants/pixelIcons.ts)
 
-Each section has a `ThreeDButton` tile with these colours:
+The hub is drawn in the same idiom as the café and the town: hard edges, flat
+fills, bevels instead of shadows. It used to be a pastel settings menu with
+24–28px radii, translucent gloss bars and Unicode dingbats, which is what made
+it look like it belonged to a different app than the pixel cats it rewards you
+with.
 
-| Tile | Style name | Background | Border | Shadow |
-|---|---|---|---|---|
-| Habits | `tilePink` | `#FFD7EA` | `#E7A9C8` | `#D98FB4` |
-| Mission | `tileBlue` | `#CFEAFF` | `#8FC2E1` | `#7DB3D4` |
-| Reflection | `tileButter` | `#FFF0BE` | `#E4C983` | `#DDBE72` |
-| Calendar | `tileLavender` | `#DDD2FF` | `#B8A5EF` | `#B39CE9` |
-| To-Do | `tilePeach` | `#FFDDBF` | `#E8B38E` | `#E8B38E` |
-| Focus | `tileMint` | `#D9F5EA` | `#9FD5BF` | `#7FC8AB` |
-| Resources | `tileMintAlt` | `#DDF8F2` | `#9FDCCB` | `#8ED4BE` |
-| Achievements | `tileGold` | `#FFE7A3` | `#E3C26B` | `#D6B052` |
+| Component | What it is |
+|---|---|
+| `PixelPanel` | The one container. Light edge top/left, dark edge bottom/right, `borderRadius: 0`. `behind` bites four corner pixels in the parent's colour — the pixel-art way to round |
+| `PixelButton` | A pressable panel. Presses **instantly** by exactly `BEVEL` and inverts the bevel; no easing, because pixel UI has no sub-pixel positions to ease through. `style` sizes the pressable, `contentStyle` pads the face |
+| `PixelText` | Pixel font by default; `plain` drops to the system font for prose. Sizes come from `TYPE` and are quantised to multiples of 4 — a pixel face blurs off-grid |
+| `PixelIcon` | A 12×12 grid through `utils/pixelSvg.ts`, coloured per section accent — **web-only, see convention 12** |
+| `PixelProgress` | Sunken well, flat fill, snapped to whole percent |
+| `PixelChip` | A bevelled square label — replaces the `borderRadius: 999` pills |
+| `usePixelMaterial` | The day/dusk material, re-checked on a 60s timer |
 
-`tileGold` is deliberately a deeper amber than Reflection's `tileButter` so the
-two don't read as the same tile.
+**One material, eight accents.** `PixelMaterial` carries the whole surface
+(`face`, `faceLt`, `faceDk`, `sunk`, `ink`, `inkDim`, `track`, `trackEdge`).
+Sections identify themselves with an accent stripe and an icon, not a fill:
+eight pastel fills at the same value read as eight equally important things,
+which is the flatness this replaced.
 
-**ThreeDButton component anatomy:**
-- Shadow layer: `tileShadowLayer` (48% width, 4px bottom margin)
-- Face: `tileFace` (min-height 142, border-radius 24, 1.2px border, 7px shadow offset)
-- Gloss overlay: `tileGloss` (25% white, 24px tall, rounded, positioned at top)
-- Press animation: `Animated.timing` → translateY 5px on press-in, spring back on release
-- Dimming: `tileDimmed` (opacity 0.55) — signals "nothing left to do here today"
+| Section | Accent | Ink |
+|---|---|---|
+| Habits | `#E7A9C8` | `#8A4A67` |
+| Mission | `#8FC2E1` | `#38617D` |
+| Reflection | `#E4C983` | `#7A6230` |
+| Calendar | `#B8A5EF` | `#4C3A7A` |
+| To-Do | `#E8B38E` | `#8A5A33` |
+| Focus | `#9FD5BF` | `#2F6B54` |
+| Achievements | `#E3C26B` | `#7A6230` |
+| Resources | `#9FDCCB` | `#2F6B54` |
+
+`ACCENT_FILLS` is a third set — each accent pushed a third toward its ink.
+Accents sit about one value step from the rose face, so an accent-on-face fill
+(the icons' interiors) disappeared entirely without it.
+
+`PixelIcon` goes through `utils/pixelSvg.ts`, which convention 12 warns is
+web-only. It is on that path deliberately, alongside `Icons.tsx`, `CatSprite`
+and `GachaMachine`: moving one call site to `react-native-svg` would add a
+dependency and leave three others broken. The migration wants to take all four
+together.
+
+**Typography.** `assets/fonts/HandjetBubble.ttf` is Handjet baked at
+`ELGR 1 / ELSH 16 / wght 800` — a static instance, because variable-font axes
+aren't reliable on native. Headings, labels and numbers are set in it; body
+prose stays in the system font. The font is loaded by `useFonts` **inside
+`app/habits/index.tsx`**, not the root layout, and the screen holds its first
+paint until it resolves — swapping it in late reflows every label and the
+numbers visibly jump.
+
+The pixel face covers Latin and punctuation but not arrows or checkmarks, so
+the hub uses ASCII chevrons (`<` `>`) and draws "done" as a filled well rather
+than a tick glyph. A missing glyph falls back to the system font mid-line,
+which is louder than the plainer mark.
+
+**Dusk, not dark mode.** `materialAt()` switches to `NIGHT_MATERIAL` on the
+same `isNightAt()` clock as the town and café (7pm–6am). It stays dark-ink-on-
+light-ground and only deepens toward lamplit plum — it is not a user-facing
+theme switch, so convention 8 still holds.
+
+### The today strip
+
+The hub leads with a "today" panel above the destinations: habits done out of
+total, a progress well, and three rows — habits, mission, reflection. Each row
+is itself a `PixelButton` that jumps into its section, and dims when that
+thing is finished for the day. The hero card it replaced answered nothing and
+still took the top of the screen.
 
 ### Sections
 
 | Section | Key render function | What it shows |
 |---|---|---|
-| `hub` | `renderHub()` | Grid of 8 ThreeDButton tiles + hero card |
+| `hub` | `renderHub()` | The today strip + a grid of 8 accented `PixelButton` tiles |
 | `habits` | `renderHabits()` (inline) | Today progress ring, habit tiles grouped by tier (via `TIER_ORDER`), "+ New habit" button |
-| `mission` | inline in return | Mission TextInput + save button, daily check-in (+25 pearls) |
-| `reflection` | inline in return | `getReflectionPromptForDate(todayKey)` — rotating daily question with 4 multiple-choice answers (2–5 pearls each) |
+| `mission` | `renderMission()` | Mission TextInput + save button, daily check-in (+25 pearls) |
+| `reflection` | `renderReflection()` | `getReflectionPromptForDate(todayKey)` — rotating daily question with 4 multiple-choice answers (2–5 pearls each) |
 | `focus` | `<FocusSection />` | Timer presets (5/10/15/25/45/60 min), start/pause/reset, break guidance |
-| `calendar` | inline in return | Month view with prev/next, per-day habit count dots, tap-to-drill-down stats |
-| `todo` | inline in return | Text input, add button, list with check/delete |
-| `resources` | inline in return | "Coming soon" placeholder cards |
+| `calendar` | `renderCalendar()` | Month view with prev/next, an accent bar under logged days, tap-to-drill-down stats |
+| `todo` | `renderTodo()` | Text input, add button, list with check/delete |
+| `resources` | `renderResources()` | "Coming soon" placeholder cards |
 | `achievements` | `renderAchievements()` | 29 achievements grouped by category, filter chips, claim pills |
 
 **The section state is a `useState`, not a route.** Navigating to `/habits`
-always lands on the hub grid first. The "← Back to Hub" button resets to hub.
+always lands on the hub grid first. The "< Back to Hub" button resets to hub.
 The `useEffect` calls `setGuideContext('habits:${section}')` whenever section changes.
 
 ### How to add a new Growth Hub section (step-by-step)
@@ -831,23 +880,15 @@ The `useEffect` calls `setGuideContext('habits:${section}')` whenever section ch
    type HubSection = '...' | 'yourSection';
    ```
 
-2. **Add a ThreeDButton** in `renderHub()` with a new tile color style:
+2. **Add an entry to `HUB_TILES`** — the key must be both a `HubSection` and a
+   `SectionIconKey`, which is what keeps the tile and its icon from drifting:
    ```typescript
-   <ThreeDButton
-     title="Your Section"
-     subtitle="Description"
-     emoji="🏆"
-     colorStyle={styles.tileYourColor}
-     onPress={() => setSection('yourSection')}
-   />
+   { key: 'yourSection', title: 'Your Section', sub: 'Description' },
    ```
 
-3. **Create the tile color style** in the StyleSheet:
-   ```typescript
-   tileYourColor: {
-     backgroundColor: '#...', borderColor: '#...', shadowColor: '#...',
-   },
-   ```
+3. **Add an accent and a 12×12 icon grid** — a colour in `ACCENTS` and
+   `ACCENT_INKS`/`ACCENT_FILLS` (`constants/pixelTheme.ts`), and a grid in
+   `SECTION_ICONS` (`constants/pixelIcons.ts`) keyed by the same name.
 
 4. **Add a render function** (or inline JSX) for the section content.
 
@@ -1220,29 +1261,41 @@ should generally not be committed with a session-local port.
 4. **Date keys, not timestamps, for daily data.** Everything keyed by day uses
    `YYYY-MM-DD` strings via the `utils/date.ts` helpers. Month is 0-indexed in
    `getDateKey()`.
-5. **The Growth Hub uses local section state, not routes.** Adding a new section
-   means: add to `HubSection` type → add tile in `renderHub()` → add render
-   function → add conditional in JSX return → set `guideContext` in `useEffect`.
-6. **Canvas rendering is imperative.** The café and town map draw through a 2D
+5. **The Growth Hub is drawn with the pixel kit.** New hub UI uses
+   `components/pixel/*` and the material from `usePixelMaterial()`, never a
+   `borderRadius`, a gradient or a hardcoded pastel. Colour is passed at render
+   time because it changes at dusk; a `StyleSheet` is frozen at module load, so
+   the local `pixel` sheet holds layout only. The shop, cat shelter and habit
+   form are still on the soft-card styles — both languages coexist until those
+   convert.
+
+6. **The Growth Hub uses local section state, not routes.** Adding a new section
+   means: add to `HubSection` type → add an entry to `HUB_TILES` → give it an
+   accent and an icon grid → add render function → add conditional in JSX
+   return → set `guideContext` in `useEffect`.
+
+7. **Canvas rendering is imperative.** The café and town map draw through a 2D
    context directly. Don't try to use React components inside them. The café's
    context is `Ctx2D` — Skia behind a Canvas2D-shaped facade
    (`components/skiaCanvas2d.ts`), which is deliberately **not** a general
    polyfill: it implements only what the café uses. Reaching for a 2D API the
    café doesn't already call means adding it to the shim first, or it works on
    web and breaks on native.
-7. **The guide system is data-driven.** Add new beats to `GUIDE_SCRIPT` in
+8. **The guide system is data-driven.** Add new beats to `GUIDE_SCRIPT` in
    `guideScript.ts` — the engine picks them up automatically based on priority
    and match conditions. Section matching uses `onHabitsSection(ctx, sectionName)`.
-8. **No dark mode.** The app has a fixed warm-light palette. `useColorScheme`
-   exists but the root layout sets a fixed background (`#FFF7F2`).
-9. **New state fields need migration.** When adding fields to `CafeState`, add
+9. **No dark mode.** The app has a fixed warm-light palette. `useColorScheme`
+   exists but the root layout sets a fixed background (`#FFF7F2`). The hub's
+   dusk material is not an exception: it follows the world clock the town and
+   café already follow, and stays dark ink on a light ground.
+10. **New state fields need migration.** When adding fields to `CafeState`, add
    defaults in `initialState` and handle the case where older saves don't have
    the field (the spread `...initialState, ...parsed` covers simple cases).
-10. **Focus timer uses `endsAt` (absolute timestamp), not a decrementing counter.**
+11. **Focus timer uses `endsAt` (absolute timestamp), not a decrementing counter.**
     This survives unmounts, app restarts, and throttled intervals. Pausing stores
     `remainingSeconds`; running derives remaining from `endsAt - Date.now()`.
     Offline time is never credited — a session mid-run at close comes back paused.
-11. **Don't build new pixel art on `utils/pixelSvg.ts` — it is web-only.**
+12. **Don't build new pixel art on `utils/pixelSvg.ts` — it is web-only.**
     It encodes a grid to an SVG data-URI rendered by a React Native `<Image>`,
     and **`<Image>` decodes PNG/JPEG/GIF/WebP, not SVG.** On iOS and Android it
     renders nothing at all; it only ever worked because `<Image>` becomes a
@@ -1256,10 +1309,11 @@ should generally not be committed with a session-local port.
     (`catImageCache.ts`, `bobaImageCache.ts`) keep the snapshot forever. A 28×37
     grid is ~1,000 cells; painting that per cat per frame at 60fps is not
     viable.
-12. **Draw functions that may run inside a state updater must be pure.** The
+13. **Draw functions that may run inside a state updater must be pure.** The
     adoption draw (`constants/gacha.ts`) takes its rolls as parameters and calls
     no `Math.random()`, because React can invoke an updater more than once per
     commit. Roll outside the updater; re-check preconditions inside it.
+14. **Never hand `drawImage` the fill paint.** Skia ignores a paint's RGB when
 13. **The greenhouse has no render loop, and should not grow one.** Nothing in
     that room moves on its own — plants change once a day, when you water them
     — so the scene is recorded into `SkPicture`s and replayed. The room picture
