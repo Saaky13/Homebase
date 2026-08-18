@@ -1,9 +1,11 @@
-import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import React, { useCallback, useRef } from 'react';
+import { View, Text, StyleSheet, PanResponder, LayoutChangeEvent } from 'react-native';
 import { useCafeState } from '../hooks/useCafeState';
+import { getTodayDateKey } from '../utils/date';
 import { colors } from '../constants/colors';
 import {
   MAX_POPULARITY,
+  clampPopularity,
   displayPopularity,
 } from '../constants/popularity';
 import { PopularityIcon } from './Icons';
@@ -24,7 +26,50 @@ import { PopularityIcon } from './Icons';
  *    stated outright rather than quietly presenting a lower number.
  */
 export default function PopularityMeter() {
-  const { state, popularityLostWhileAway, cafeMultiplier } = useCafeState();
+  const { state, updateState, popularityLostWhileAway, cafeMultiplier } = useCafeState();
+
+  // Dev-only: drag anywhere on the track to set the standing outright.
+  //
+  // Popularity is the one number you cannot reach by playing for a minute — it
+  // only climbs through real days of habits and focus, and it decays back down
+  // between them. Spawn pacing and group size are both driven off it, so
+  // testing a busy café any other way means waiting a week.
+  //
+  // `popularityLastDecayedDate` moves to today alongside the value: without it,
+  // the next settle would apply however many days of decay the save had
+  // outstanding and eat the number you just dialled in.
+  const trackWidth = useRef(0);
+
+  const handleTrackLayout = useCallback((e: LayoutChangeEvent) => {
+    trackWidth.current = e.nativeEvent.layout.width;
+  }, []);
+
+  const setFromTouch = useCallback(
+    (locationX: number) => {
+      const width = trackWidth.current;
+      if (!width) return;
+      const ratio = Math.max(0, Math.min(1, locationX / width));
+      updateState({
+        popularity: clampPopularity(ratio * MAX_POPULARITY),
+        popularityLastDecayedDate: getTodayDateKey(),
+      });
+    },
+    [updateState]
+  );
+
+  const setFromTouchRef = useRef(setFromTouch);
+  setFromTouchRef.current = setFromTouch;
+
+  // Built once: rebuilding per render would hand an in-flight drag a stale
+  // setter, the same reason the café's serve gesture keeps its responder in a ref.
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderGrant: (e) => setFromTouchRef.current(e.nativeEvent.locationX),
+      onPanResponderMove: (e) => setFromTouchRef.current(e.nativeEvent.locationX),
+    })
+  ).current;
 
   const shown = displayPopularity(state.popularity);
   const fillPercent = (shown / MAX_POPULARITY) * 100;
@@ -39,7 +84,13 @@ export default function PopularityMeter() {
         {describeStanding(shown)}
       </Text>
 
-      <View style={styles.track}>
+      <View
+        style={styles.track}
+        // The track is 7px tall; without this the dev scrub is a hairline target.
+        hitSlop={{ top: 10, bottom: 10 }}
+        onLayout={handleTrackLayout}
+        {...panResponder.panHandlers}
+      >
         <View style={[styles.fill, { width: `${fillPercent}%` }]} />
       </View>
 
