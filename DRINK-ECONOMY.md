@@ -329,9 +329,12 @@ a mode that silently becomes a different mode is worse than one you pick.
   serve up an affinity step. Gives the greenhouse a reason to feed the café.
 - **Order tickets**: occasionally a cat arrives demanding one specific drink at a
   premium, ignoring its own preferences. A rush event.
-- **Tap-to-inspect on the town map** — the card from `SERVE-INTERACTION.md` §9,
-  over a roaming cat. Different renderer and its own hit-testing, so it is
-  genuinely separate work.
+- ~~Tap-to-inspect on the town map~~ — **built**, landed early alongside the
+  café-floor version. Both reuse the full `CatAlmanacSheet` rather than the
+  compact anchored card `SERVE-INTERACTION.md` §9 specifies — there's no bond
+  level or brewed-recipe preview to show yet, so the smaller card has nothing
+  over the sheet. §9's version is worth building once Phase 1 (the rail) and
+  Phase 4 (bond) exist to fill it.
 - Achievements for almanac completion, per-rarity bonds, first legendary match.
 
 ---

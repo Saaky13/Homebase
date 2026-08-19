@@ -370,6 +370,16 @@ should be ephemeral.
 
 ## 9. The inspect card
 
+**A simplified version of this shipped early**, on both the café floor and the
+town map: tap a waiting or seated cat (café) or a roaming one (town) and the
+full `CatAlmanacSheet` opens as a bottom sheet, not the compact anchored card
+below. There's no bond level or brewed-recipe payout to show yet — those need
+Phase 1 (the rail) and Phase 4 (bond) — so the full sheet has everything the
+small card would and nothing it wouldn't. The spec below is what the card
+becomes once those exist; the hit-testing it describes is already built for
+both surfaces (café: `CafeCanvas.tsx`'s `handleInspectTap`; town:
+`TownMap.tsx`'s, against the live `Roamer` array).
+
 Tap any cat in the queue — or seated — and a card opens anchored above its head.
 
 This is the same component as the almanac's entry body, at a smaller size. Tap
@@ -573,10 +583,9 @@ no sub-pixel positions to ease through), the room is a physical space.
   the player's own bad serve. But they change spawn pacing, the queue state
   machine and the guide script, and they are separable from the serve gesture.
   Next pass, and the streak's walk-out break wires up then.
-- **Tap-to-inspect on the town map.** Different renderer, own hit-testing,
-  moving BFS targets, no serve decision out there. Shares only the card.
-- **Gacha unlocking recipes.** The rail reads `state.recipes`; how ids get into
-  that array is the machine's problem.
+- ~~Tap-to-inspect on the town map.~~ **Built** — see §9.
+- ~~Gacha unlocking recipes.~~ **Built** — the capsule machine's second
+  hopper, per `DRINK-ECONOMY.md` Phase 6.
 - **Toppings, sizes, temperature.** A second axis of choice on top of 24 recipes
   and 36 cats is more combinations than a player can hold. Not until the first
   axis is proven.
