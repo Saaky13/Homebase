@@ -7,7 +7,7 @@ import { useRouter } from 'expo-router';
 import { createCanvasPainter } from '../town/canvasPainter';
 import { drawRoamers, drawTown } from '../town/draw';
 import {
-  BUILDINGS, buildTownGrid, FOUNTAIN, GREENHOUSE, MAP_PX_H, MAP_PX_W, TILE,
+  BUILDINGS, buildTownGrid, FOUNTAIN, FOUNTAIN_R, GREENHOUSE, MAP_PX_H, MAP_PX_W, TILE,
 } from '../town/map';
 import {
   DAY_PALETTE, DAY_ROOFS, isNightAt, nightPalette, nightRoofs,
@@ -18,12 +18,19 @@ import { useCafeState } from '../hooks/useCafeState';
 /** Keeps the town lively without turning the paths into a parade. */
 const MAX_ROAMERS = 16;
 
-/** Tap target around the fountain — the Growth Hub entrance. */
+/**
+ * Tap target around the fountain — the Growth Hub entrance.
+ *
+ * Derived from `FOUNTAIN_R` so it can never drift from the basin, and extended
+ * upward past it: the centrepiece stands well clear of the water, and the
+ * statue is the part of the landmark you actually aim at.
+ */
+const STATUE_REACH = 70;
 const FOUNTAIN_HIT = {
-  x: FOUNTAIN.tx * TILE - 34,
-  y: FOUNTAIN.ty * TILE - 34,
-  w: 68,
-  h: 62,
+  x: FOUNTAIN.tx * TILE - FOUNTAIN_R.x,
+  y: FOUNTAIN.ty * TILE - STATUE_REACH,
+  w: FOUNTAIN_R.x * 2,
+  h: STATUE_REACH + FOUNTAIN_R.down,
 };
 
 /**
@@ -226,7 +233,7 @@ export default function TownMap({ night }: { night?: boolean }) {
         {renderLabel(
           'growth-hub',
           FOUNTAIN.tx * TILE * scale,
-          (FOUNTAIN.ty * TILE + 30) * scale,
+          (FOUNTAIN.ty * TILE + FOUNTAIN_R.down + 3) * scale,
           'Growth Hub',
           true
         )}

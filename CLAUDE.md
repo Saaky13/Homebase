@@ -84,7 +84,7 @@ cat cafe/
     │   ├── SeedRackSheet.tsx    # Bottom sheet — the seed packets you buy from
     │   ├── AdoptionReveal.tsx  # Full-screen reveal after an adoption
     │   ├── CurrencyBar.tsx  # Coins + Pearls bar (unused — replaced by TopBar pills)
-    │   ├── FocusSection.tsx # Focus timer UI — rendered as a Growth Hub section
+    │   ├── FocusSection.tsx # Focus timer UI — a Growth Hub section, on the pixel kit
     │   ├── GuideOverlay.tsx # Animated bottom sheet — name prompt + contextual guide beats
     │   ├── Icons.tsx        # Coin / Pearl / Popularity pixel icons as SVG data-URIs
     │   ├── PopularityMeter.tsx  # Popularity bar shown on the café screen
@@ -247,6 +247,7 @@ interface GuideState {
   snoozedUntil: number | null;           // if set and in the future, guide stays silent
   lastOpenedDate: string | null;         // dateKey of most recent open, for "welcome back" gap
   lastAcknowledgedLevel: number;         // highest level already congratulated
+  caughtUp: boolean;                     // has this save spent its already-true `moment` beats
 }
 
 interface FocusTimer {
@@ -717,43 +718,78 @@ frames on the wall.
 
 ## Guide system (constants/guideScript.ts + hooks/guideEngine.ts + components/GuideOverlay.tsx)
 
-A contextual message system that surfaces the right nudge at the right time.
+Sage — the rare sage-green cat from the roster — is the one talking. Every line
+in `guideScript.ts` is written as her speaking, and `GUIDE_CAT_ID` names her so
+the overlay can draw her portrait. She stays adoptable in the shelter: the point
+is that the tips come from a cat you can go and take home, not from the game.
 
 **How it works:**
 1. `GuideOverlay` re-evaluates every 5 seconds and on every state change
 2. `resolveGuideMessage()` filters eligible beats (not muted, past cooldown, `match()` passes)
 3. Highest priority wins; ties broken by script order
 4. Once shown, one-time beats never return; repeatable beats respect `cooldownHours`
+5. A beat belongs to the screen it resolved on — changing route or `guideContext`
+   clears it rather than letting it ride along into the next room
+
+### `GuideKind` — what a beat is, which decides when it may interrupt
+
+| Kind | Band | Behaviour |
+|---|---|---|
+| `moment` | 40–59, big ones 85–100 | Celebrates something that just happened. Its match stays true forever after, so `catchUpSeenIds` spends these silently on any save that already satisfies them (see below) |
+| `orientation` | 60–79, on-demand 80–82 | "Here's what this screen is." Fires while you stand on the thing it describes, and outranks moments for exactly that reason |
+| `nudge` | 1–35 | A recurring reminder. Gated on `inTown(ctx)` — the map is the only screen where a reminder isn't interrupting something |
+
+`catchUpSeenIds(state)` (in `guideEngine.ts`) runs **once per save**, guarded by
+`guide.caughtUp`. It marks every already-true one-time `moment` as seen without
+showing it, and rolls `lastAcknowledgedLevel` to the current level. Without it,
+any save older than a beat fires a queue of congratulations for things it did
+weeks ago, four seconds apart, on whatever screen happens to be open. A fresh
+save matches none of them and loses nothing.
+
+`consumesContext: true` marks beats summoned by a button press (they match on a
+one-shot `guideContext`). Dismissing clears that context, or the beat re-fires
+the moment the 4s anti-flicker gap lapses and can never be got rid of.
 
 ### Complete guide beat table
 
-| ID | Priority | Repeatable | Cooldown | Match condition |
-|---|---|---|---|---|
-| `welcome-first-open` | 100 | no | — | No beats ever seen |
-| `welcome-back` | 90 | yes | 12h | 2+ days since last open |
-| `level-up` | 85 | yes | — | Level > lastAcknowledgedLevel |
-| `focus-queue-waiting` | 55 | yes | 2h | Any queue cat waiting 10+ min |
-| `habit-streak-7` | 48 | no | — | Any habit has 7-day streak |
-| `habit-streak-3` | 47 | no | — | Any habit has 3-day streak |
-| `first-habit-completed` | 46 | no | — | Any habitLog has reps > 0 |
-| `first-habit-created` | 45 | no | — | habits.length > 0 |
-| `first-mission-checkin` | 44 | no | — | missionLastClaimedDate set |
-| `first-cat-served` | 43 | no | — | Total drinks served > 0 |
-| `first-focus-session` | 42 | no | — | totalFocusMinutes ≥ 1 |
-| `mission-first-visit` | 41 | no | — | On habits:mission, mission empty |
-| `habits-first-visit` | 40 | no | — | On habits:hub |
-| `calendar-first-visit` | 39 | no | — | On habits:calendar |
-| `todo-first-visit` | 38 | no | — | On habits:todo |
-| `reflection-first-visit` | 37 | no | — | On habits:reflection |
-| `resources-first-visit` | 36 | no | — | On habits:resources |
-| `focus-first-visit` | 35 | no | — | On habits:focus |
-| `cafe-first-visit` | 34 | no | — | On /cafe route |
-| `shop-first-visit` | 33 | no | — | On /shop route |
-| `shelter-first-visit` | 32 | no | — | On /cats route |
-| `mission-unclaimed-today` | 20 | yes | 20h | Has mission, not checked in today |
-| `no-focus-yet-today` | 18 | yes | 20h | After 1pm, no focus today |
-| `mission-empty-nudge` | 15 | yes | 48h | No mission set |
-| `time-of-day-greeting` | 1 | yes | 20h | Always (lowest priority fallback) |
+| ID | Kind | Priority | Repeatable | Cooldown | Match condition |
+|---|---|---|---|---|---|
+| `welcome-first-open` | orientation | 100 | no | — | No beats ever seen |
+| `welcome-back` | moment | 92 | yes | 12h | 2+ days since last open |
+| `level-up` | moment | 88 | yes | — | Level > lastAcknowledgedLevel |
+| `focus-session-complete` | orientation | 82 | yes | 0h | `guideContext === 'focus:complete'` |
+| `focus-why-breaks` | orientation | 80 | yes | 0h | `guideContext === 'focus:breaks'` |
+| `focus-good-break` | orientation | 80 | yes | 0h | `guideContext === 'focus:goodBreak'` |
+| `habits-first-visit` | orientation | 72 | no | — | On habits:hub |
+| `cafe-first-visit` | orientation | 71 | no | — | On /cafe route |
+| `mission-first-visit` | orientation | 70 | no | — | On habits:mission, mission empty |
+| `focus-first-visit` | orientation | 69 | no | — | On habits:focus |
+| `shelter-first-visit` | orientation | 68 | no | — | On /cats route |
+| `greenhouse-first-visit` | orientation | 67 | no | — | On /greenhouse route |
+| `shop-first-visit` | orientation | 66 | no | — | On /shop route |
+| `calendar-first-visit` | orientation | 65 | no | — | On habits:calendar |
+| `todo-first-visit` | orientation | 64 | no | — | On habits:todo |
+| `reflection-first-visit` | orientation | 63 | no | — | On habits:reflection |
+| `achievements-first-visit` | orientation | 62 | no | — | On habits:achievements |
+| `resources-first-visit` | orientation | 61 | no | — | On habits:resources |
+| `habit-streak-7` | moment | 52 | no | — | Any habit has 7-day streak |
+| `habit-streak-3` | moment | 51 | no | — | Any habit has 3-day streak |
+| `first-cat-served` | moment | 48 | no | — | Total drinks served > 0 |
+| `first-habit-completed` | moment | 47 | no | — | Any habitLog has reps > 0 |
+| `first-habit-created` | moment | 46 | no | — | habits.length > 0 |
+| `first-mission-checkin` | moment | 45 | no | — | missionLastClaimedDate set |
+| `first-focus-session` | moment | 44 | no | — | totalFocusMinutes ≥ 1 |
+| `greenhouse-thirsty` | nudge | 30 | yes | 10h | In town, a live plant unwatered today |
+| `boba-waiting-to-serve` | nudge | 26 | yes | 6h | In town, 3+ boba on hand, nothing served today |
+| `mission-unclaimed-today` | nudge | 22 | yes | 20h | In town, has mission, not checked in today |
+| `no-focus-yet-today` | nudge | 18 | yes | 20h | In town, after 1pm, no focus today |
+| `mission-empty-nudge` | nudge | 14 | yes | 48h | In town, no mission set |
+| `time-of-day-greeting` | nudge | 1 | yes | 20h | In town (lowest-priority fallback) |
+
+Nudges that navigate deep-link into a Growth Hub section
+(`/habits?section=mission`), because the hub keeps its section in local state
+and `/habits` alone always lands on the grid — "check in now" used to drop you a
+tap short of the thing it named.
 
 **GuideContext interface:**
 ```typescript
@@ -863,7 +899,7 @@ still took the top of the screen.
 | `habits` | `renderHabits()` (inline) | Today progress ring, habit tiles grouped by tier (via `TIER_ORDER`), "+ New habit" button |
 | `mission` | `renderMission()` | Mission TextInput + save button, daily check-in (+25 pearls) |
 | `reflection` | `renderReflection()` | `getReflectionPromptForDate(todayKey)` — rotating daily question with 4 multiple-choice answers (2–5 pearls each) |
-| `focus` | `<FocusSection />` | Timer presets (5/10/15/25/45/60 min), start/pause/reset, break guidance |
+| `focus` | `<FocusSection />` | Timer presets (5/15/25/45 min), start/pause/reset, break guidance, dev coin/pearl grants |
 | `calendar` | `renderCalendar()` | Month view with prev/next, an accent bar under logged days, tap-to-drill-down stats |
 | `todo` | `renderTodo()` | Text input, add button, list with check/delete |
 | `resources` | `renderResources()` | "Coming soon" placeholder cards |
@@ -915,26 +951,37 @@ navigate to the app's screens.
 ### Grid dimensions
 - **Tile size:** 8px (`TILE`)
 - **Map:** 48 × 92 tiles = 384 × 736 pixels
-- **Fountain (Growth Hub entry):** tile (16, 15)
+- **Fountain (Growth Hub entry):** tile (8, 63)
 
-### Key buildings with routes
+### Every door is in the south
+
+`BUILDINGS` is ordered north to south, and **everything carrying a `route`
+lives in the bottom third of the map.** A phone is held low and gripped at the
+bottom; the top of a 92-tile map is the hardest part of the screen to reach,
+and that is exactly where the civic buildings used to be — the map opened on
+the outskirts and you scrolled *up* to reach the app.
 
 | ID | Position (tile) | Size (tiles) | Label | Route |
 |---|---|---|---|---|
-| `library` | (6, 9) | 6×5 | Library | `/habits` |
-| `mission` | (21, 8) | 5×5 | Mission Hall | `/habits` |
-| `archive` | (6, 17) | 5×4 | Archive | `/habits` |
-| `cafe` | (4, 27) | 5×5 | Café | `/cafe` |
-| `market` | (17, 28) | 5×4 | Market | `/shop` |
-| `shelter` | (17, 34) | 5×4 | Cat Shelter | `/cats` |
+| `market` | (31, 49) | 5×4 | Market | `/shop` |
+| `shelter` | (18, 52) | 5×4 | Cat Shelter | `/cats` |
+| `library` | (6, 55) | 6×5 | Library | `/habits` |
+| `cafe` | (29, 56) | 5×5 | Café | `/cafe` |
+| `mission` | (16, 61) | 5×5 | Mission Hall | `/habits` |
+| `archive` | (15, 69) | 5×4 | Archive | `/habits` |
 
-Other buildings (inn, bakery, observatory, grocer, workshop, nursery, shrine,
-15 houses) are scenery — no route yet. 4 empty plots rendered as dirt rings
-with signposts.
+The fountain and the greenhouse (`GREENHOUSE`, tile (28, 67)) share that band —
+both are daily visits. The two lowest and most central doors are the ones you
+open most: the fountain and the café.
 
-The shelter is sited beside the café and market rather than on one of the
-southern empty plots, since it's somewhere you visit often and those plots are
-a long scroll from everything else.
+North of it is scenery: inn, shrine, grocer, workshop, bakery, observatory,
+nursery and **7** houses. There used to be 15, and a map that is mostly
+anonymous cottages reads as a place full of doors that don't open. The paving
+blobs and the street spine were re-weighted to match — the town's mass sits
+under the thumb rather than trailing off into a narrow southern tail.
+
+`EMPTY_PLOTS` is down to **2**, both in the northern half. The south is spoken
+for, and a plot is a promise rather than a destination.
 
 ### Wandering cats on the town map (town/roam.ts)
 
@@ -1000,6 +1047,11 @@ items, unchanged by the cat removal.
 7 cats: Luna 🐈‍⬛, Whiskers 🧡, Mittens 🤍, Sage 💚, Jazz 🟠, Shadow ⬛, Sunny 🌟.
 Still exported, tied to the legacy `queue` field. The café canvas draws roster
 cats from `ownedCats` instead and does not read this.
+
+`state.queue`, `addCatToQueue` and `updateQueueWaitTimes` now have **no callers
+at all** — the last one was the focus timer, which used to push a cat onto the
+queue and fire an `Alert.alert` that react-native-web never renders. Deleting
+them is a separate cleanup.
 
 ### Reflection prompts
 
@@ -1140,7 +1192,8 @@ shadow: 'rgba(92,58,42,0.16)'  outline: 'rgba(92,58,42,0.12)'
 - **Rounded cards** with 1.2px pastel borders and subtle `shadowOffset` for depth
 - **Pill chips** for currencies: coins gold, pearls purple, level pink
 - **Progress bars** with rounded tracks
-- **Retro pixel buttons** (Focus section): outer/inner rounded rects in gold/sky/pink
+- **Retro pixel buttons**: the Focus section used to draw its own gold/sky/pink rounded
+  rects; it now uses `components/pixel/PixelButton` like the rest of the hub
 
 ### Colour families
 - **Hub / Growth:** pinks, lavenders, soft whites (`#FFF6FB`, `#F1D6E6`, `#FFD7EA`)

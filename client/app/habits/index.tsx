@@ -9,7 +9,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useFonts } from 'expo-font';
 import { useCafeState } from '../../hooks/useCafeState';
 import { getReflectionPromptForDate, SHOP_ITEMS } from '../../constants/cafeData';
@@ -89,6 +89,19 @@ const HUB_TILES: { key: SectionIconKey & HubSection; title: string; sub: string 
   { key: 'resources', title: 'Resources', sub: 'Guides later' },
 ];
 
+const SECTION_KEYS = new Set<string>(['hub', ...HUB_TILES.map((tile) => tile.key)]);
+
+/**
+ * The hub keeps its section in local state rather than in the route, so a link
+ * to `/habits` always lands on the grid. A `?section=` param is how the guide
+ * (and anything else outside this screen) points at one destination — "check
+ * in with your mission" used to drop you a tap short of the mission.
+ */
+function toSection(value: string | string[] | undefined): HubSection {
+  const key = Array.isArray(value) ? value[0] : value;
+  return key && SECTION_KEYS.has(key) ? (key as HubSection) : 'hub';
+}
+
 export default function HabitsTab() {
   const router = useRouter();
   const {
@@ -117,7 +130,8 @@ export default function HabitsTab() {
   // screen that uses it. This moves up once the rest of the app converts.
   const [fontLoaded] = useFonts({ [PIXEL_FONT]: PIXEL_FONT_FILE });
 
-  const [section, setSection] = useState<HubSection>('hub');
+  const params = useLocalSearchParams<{ section?: string }>();
+  const [section, setSection] = useState<HubSection>(() => toSection(params.section));
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedDateKey, setSelectedDateKey] = useState<string | null>(null);
   const [missionDraft, setMissionDraft] = useState(state.mission);
@@ -126,6 +140,13 @@ export default function HabitsTab() {
   useEffect(() => {
     setGuideContext(`habits:${section}`);
   }, [section, setGuideContext]);
+
+  // Re-navigating to `/habits?section=x` while the hub is already mounted only
+  // changes the param, not the mounted component, so the initial state above
+  // never re-runs.
+  useEffect(() => {
+    if (params.section) setSection(toSection(params.section));
+  }, [params.section]);
 
   // missionDraft is seeded from state.mission before the persisted state has
   // finished loading from AsyncStorage. Sync it once loading completes so a

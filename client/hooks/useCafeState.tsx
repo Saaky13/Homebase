@@ -45,6 +45,7 @@ import {
   BLOOM_BONUS,
   PENDING_CAP_DAYS,
 } from '../constants/plants';
+import { catchUpSeenIds } from './guideEngine';
 
 /**
  * One pot on a bench.
@@ -148,6 +149,11 @@ export interface GuideState {
   lastOpenedDate: string | null;
   // highest café level the user has already been congratulated for
   lastAcknowledgedLevel: number;
+  // whether this save has had its already-true one-time "moment" beats spent
+  // without showing them. See `catchUpSeenIds` — without it, any save older
+  // than the guide fires a queue of congratulations for things it did weeks
+  // ago, four seconds apart, on whatever screen happens to be open.
+  caughtUp: boolean;
 }
 
 /**
@@ -328,6 +334,10 @@ const initialState: CafeState = {
     snoozedUntil: null,
     lastOpenedDate: null,
     lastAcknowledgedLevel: 1,
+    // A brand new save has nothing to catch up on; the load path flips this
+    // and finds no matches. It exists so an *older* save only ever runs the
+    // backfill once.
+    caughtUp: false,
   },
   focusSessionActive: false,
   focusTimer: idleFocusTimer(),
@@ -790,9 +800,30 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
         // picture. Every gain path settles again before it writes.
         const grown = settleGreenhouse(settled, todayKey);
 
+        // Spend the one-time moments this save already satisfies, once, without
+        // showing them. `lastAcknowledgedLevel` is the same idea for the one
+        // moment that repeats: a save that reached level 4 before the beat
+        // existed shouldn't be told it just got there.
+        //
+        // A first launch has no history to catch up on, so it only flips the
+        // flag — running the backfill there would be harmless today but would
+        // silently eat any future moment that happens to be true at zero.
+        const caughtUpGuide = grown.guide.caughtUp
+          ? grown.guide
+          : saved
+          ? {
+              ...grown.guide,
+              caughtUp: true,
+              lastAcknowledgedLevel: Math.max(grown.guide.lastAcknowledgedLevel, grown.level),
+              seenMessageIds: Array.from(
+                new Set([...grown.guide.seenMessageIds, ...catchUpSeenIds(grown)])
+              ),
+            }
+          : { ...grown.guide, caughtUp: true };
+
         const next = {
           ...grown,
-          guide: { ...grown.guide, lastOpenedDate: todayKey },
+          guide: { ...caughtUpGuide, lastOpenedDate: todayKey },
         };
 
         setState(next);

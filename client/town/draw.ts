@@ -354,36 +354,156 @@ function drawGreenhouse(c: Ctx): void {
   p.rect(x + 1, y + h - 3, w - 2, 2, pal.woodDk);
 }
 
+/**
+ * A horizontal band list: `[inset, height]` per row, drawn symmetrically about
+ * the shape's centre line.
+ *
+ * Pixel art has no curves, so a round rim is a stack of bars that step inward.
+ * Every stone lip, bowl and plinth in the square is built this way — it keeps
+ * the fountain in the same idiom as the roofs and the rockface rather than
+ * introducing a second, smoother vocabulary at the biggest object in town.
+ */
+type Band = readonly [inset: number, h: number];
+
+function bands(p: Painter, cx: number, top: number, w: number, list: readonly Band[], color: string): number {
+  let y = top;
+  for (const [inset, h] of list) {
+    p.rect(cx - w / 2 + inset, y, w - inset * 2, h, color);
+    y += h;
+  }
+  return y;
+}
+
+const BASIN_OUT: readonly Band[] = [[8, 3], [5, 3], [3, 3], [1, 4], [0, 30], [1, 4], [3, 3], [5, 3], [8, 3]];
+const BASIN_IN: readonly Band[] = [[8, 3], [4, 3], [2, 3], [0, 28], [2, 3], [4, 3], [8, 3]];
+
+/**
+ * The pool, the kerb and the water — everything the five builds share.
+ *
+ * Only the centrepiece changes between styles, because the basin is what makes
+ * the square legible from a thumb's distance and it should not move when the
+ * statue does.
+ */
+function drawFountainPool(c: Ctx, cx: number, cy: number): void {
+  const { p, pal } = c;
+  bands(p, cx, cy - 24, 100, BASIN_OUT, pal.shadow);
+  bands(p, cx, cy - 26, 96, BASIN_OUT, pal.stoneDk);
+  bands(p, cx, cy - 25, 92, BASIN_OUT, pal.stone);
+  p.rect(cx - 44, cy - 22, 88, 2, pal.stoneLt);
+
+  bands(p, cx, cy - 21, 86, BASIN_IN, pal.water);
+  p.rect(cx - 39, cy - 18, 78, 3, pal.foam);
+  p.rect(cx - 39, cy + 12, 78, 5, pal.waterDk);
+  for (let i = 0; i < 7; i++) {
+    p.rect(cx - 32 + i * 10, cy - 8 + (i % 3) * 6, 6, 1, pal.waterLt);
+  }
+  // Kerb shadow inside the near wall, so the pool reads as sunk rather than painted on.
+  p.rect(cx - 39, cy + 17, 78, 2, pal.stoneDk);
+}
+
+/** Water falling as a column of foam, thinning as it goes. */
+function drawFall(c: Ctx, x: number, y: number, h: number, w: number): void {
+  c.p.rect(x, y, w, h, c.pal.foam);
+  c.p.rect(x, y + h, w + 2, 2, c.pal.waterLt);
+}
+
+/**
+ * The Growth Hub's front door, and the largest thing on the map.
+ *
+ * A tiered cascade in carved stone with gilded rims and a crown on top. It is
+ * deliberately grander than anything else in town: the fountain is where the
+ * app's actual work is filed, and a landmark you steer by beats a building you
+ * have to go and find. There is no cat on it — every other cat in this town is
+ * a real one you adopted, and a stone one on the civic monument read as a
+ * mascot rather than a memorial.
+ *
+ * Carved in `rock`, not `stone`: the basin rim is already paving-coloured, so a
+ * centrepiece in the same family dissolved into the square behind it.
+ */
 function drawFountain(c: Ctx): void {
   const { p, pal } = c;
   const cx = FOUNTAIN.tx * TILE, cy = FOUNTAIN.ty * TILE;
-  p.rect(cx - 34, cy - 20, 68, 48, pal.shadow);
-  p.rect(cx - 32, cy - 18, 64, 42, pal.stoneDk);
-  p.rect(cx - 30, cy - 16, 60, 38, pal.stoneLt);
-  p.rect(cx - 27, cy - 13, 54, 32, pal.water);
-  p.rect(cx - 27, cy - 13, 54, 3, pal.foam);
-  for (let i = 0; i < 6; i++) p.rect(cx - 22 + i * 8, cy - 2 + (i % 2) * 4, 5, 1, pal.waterLt);
-  p.rect(cx - 16, cy - 12, 32, 18, pal.stoneDk);
-  p.rect(cx - 14, cy - 10, 28, 14, pal.stoneLt);
-  p.rect(cx - 11, cy - 8, 22, 9, pal.water);
-  p.rect(cx - 11, cy - 8, 22, 2, pal.foam);
-  p.rect(cx - 5, cy - 22, 10, 14, pal.stoneDk);
-  p.rect(cx - 4, cy - 22, 8, 12, pal.stoneLt);
-  p.rect(cx - 7, cy - 25, 14, 4, pal.stoneDk);
-  p.rect(cx - 6, cy - 25, 12, 2, pal.stoneLt);
-  // Cat on the column.
-  p.rect(cx - 6, cy - 34, 3, 4, pal.stoneDk);
-  p.rect(cx + 3, cy - 34, 3, 4, pal.stoneDk);
-  p.rect(cx - 7, cy - 32, 14, 10, pal.stoneDk);
-  p.rect(cx - 6, cy - 32, 12, 8, pal.stoneLt);
-  p.rect(cx - 4, cy - 29, 2, 2, pal.rockDk);
-  p.rect(cx + 2, cy - 29, 2, 2, pal.rockDk);
-  p.rect(cx - 3, cy - 25, 6, 4, pal.stoneDk);
-  p.rect(cx + 6, cy - 28, 3, 8, pal.stoneDk);
-  p.rect(cx - 14, cy - 18, 2, 7, pal.foam);
-  p.rect(cx + 12, cy - 18, 2, 7, pal.foam);
-  p.rect(cx - 19, cy - 14, 2, 5, pal.foam);
-  p.rect(cx + 17, cy - 14, 2, 5, pal.foam);
+  drawFountainPool(c, cx, cy);
+
+  // Plinth, standing in the water.
+  bands(p, cx, cy - 4, 48, [[10, 2], [5, 2], [2, 2], [0, 10]], pal.rockDk);
+  bands(p, cx, cy - 3, 44, [[10, 2], [5, 2], [2, 2], [0, 9]], pal.rock);
+  p.rect(cx - 20, cy - 1, 40, 2, pal.gold);
+  p.rect(cx - 20, cy + 1, 40, 1, pal.goldDk);
+
+  // Lower bowl, with a gilded rim and scrolled brackets beneath it.
+  bands(p, cx, cy - 24, 64, [[12, 2], [7, 2], [3, 2], [1, 2], [0, 6], [3, 2], [8, 2], [14, 2]], pal.rockDk);
+  bands(p, cx, cy - 23, 60, [[12, 2], [7, 2], [3, 2], [1, 2], [0, 5], [3, 2], [8, 2], [14, 2]], pal.rock);
+  p.rect(cx - 30, cy - 22, 60, 2, pal.gold);
+  p.rect(cx - 27, cy - 19, 54, 6, pal.water);
+  p.rect(cx - 27, cy - 19, 54, 2, pal.foam);
+  for (const s of [-1, 1] as const) {
+    p.rect(cx + s * 24 - 2, cy - 8, 4, 3, pal.rockDk);
+    p.rect(cx + s * 20 - 2, cy - 6, 4, 3, pal.rockDk);
+    p.rect(cx + s * 17 - 2, cy - 4, 4, 3, pal.rockDk);
+  }
+
+  // Fluted shaft with a gold collar at each end.
+  p.rect(cx - 8, cy - 38, 16, 16, pal.rockDk);
+  p.rect(cx - 6, cy - 38, 11, 16, pal.rock);
+  p.rect(cx - 6, cy - 38, 2, 16, pal.rockLt);
+  p.rect(cx + 1, cy - 38, 1, 16, pal.rockDk);
+  p.rect(cx - 10, cy - 40, 20, 2, pal.gold);
+  p.rect(cx - 10, cy - 24, 20, 2, pal.goldDk);
+
+  // Middle bowl.
+  bands(p, cx, cy - 48, 42, [[7, 2], [3, 2], [1, 2], [0, 6], [3, 2], [8, 2]], pal.rockDk);
+  bands(p, cx, cy - 47, 38, [[7, 2], [3, 2], [1, 2], [0, 5], [3, 2], [8, 2]], pal.rock);
+  p.rect(cx - 19, cy - 46, 38, 2, pal.gold);
+  p.rect(cx - 16, cy - 43, 32, 4, pal.water);
+  p.rect(cx - 16, cy - 43, 32, 2, pal.foam);
+
+  // Upper shaft and bowl.
+  p.rect(cx - 5, cy - 60, 10, 14, pal.rockDk);
+  p.rect(cx - 4, cy - 60, 6, 14, pal.rock);
+  p.rect(cx - 4, cy - 60, 2, 14, pal.rockLt);
+  bands(p, cx, cy - 66, 28, [[5, 2], [2, 2], [0, 4], [4, 2]], pal.rockDk);
+  bands(p, cx, cy - 65, 24, [[5, 2], [2, 2], [0, 3], [4, 2]], pal.rock);
+  p.rect(cx - 13, cy - 64, 26, 2, pal.gold);
+  p.rect(cx - 10, cy - 61, 20, 2, pal.foam);
+
+  drawCrown(c, cx, cy - 66);
+
+  // The falls, drawn last so they sit over the lips they spill from.
+  // Each pair is mirrored about `cx` — a fall `w` wide at `-d` mirrors to
+  // `+(d - w)`, not to `+d`, and getting that wrong tilts the whole monument.
+  // They start just inside each rim so the water leaves the lip rather than
+  // running down beside it as a pair of white posts.
+  drawFall(c, cx - 11, cy - 62, 12, 3);
+  drawFall(c, cx + 8, cy - 62, 12, 3);
+  drawFall(c, cx - 16, cy - 42, 14, 3);
+  drawFall(c, cx + 13, cy - 42, 14, 3);
+  drawFall(c, cx - 26, cy - 18, 12, 3);
+  drawFall(c, cx + 23, cy - 18, 12, 3);
+}
+
+/**
+ * The finial: a gold crown, five points, jewelled band.
+ *
+ * The crown is the only pure-gold thing in the town and it sits at the top of
+ * the tallest object in it — which is the whole argument for putting it there.
+ */
+function drawCrown(c: Ctx, cx: number, base: number): void {
+  const { p, pal } = c;
+  // Band.
+  p.rect(cx - 12, base - 6, 24, 6, pal.goldDk);
+  p.rect(cx - 11, base - 6, 22, 4, pal.gold);
+  p.rect(cx - 11, base - 6, 22, 1, pal.amberLt);
+  for (const ox of [-8, -3, 2, 7] as const) p.rect(cx + ox, base - 4, 2, 2, pal.berry);
+
+  // Five points, tallest in the middle, each stepping to a tip.
+  const points: readonly [number, number][] = [[-12, 6], [-7, 10], [-1, 15], [5, 10], [10, 6]];
+  for (const [ox, h] of points) {
+    p.rect(cx + ox, base - 6 - h, 2, h, pal.goldDk);
+    p.rect(cx + ox, base - 6 - h, 1, h, pal.gold);
+    p.rect(cx + ox - 1, base - 8 - h, 4, 3, pal.gold);
+    p.rect(cx + ox, base - 9 - h, 2, 2, pal.amberLt);
+  }
 }
 
 function drawWaterfall(c: Ctx): void {
