@@ -24,11 +24,19 @@ import {
   POPULARITY_GAINS,
 } from '../constants/popularity';
 import {
-  adoptionCost,
-  pickCat,
+  pickPrize,
+  pullCost,
   seedOwnedCats,
   STARTER_CATS,
+  type Prize,
 } from '../constants/gacha';
+import { DRINKS, STARTER_RECIPES, type DrinkId } from '../constants/drinks';
+import {
+  backfillCatStats,
+  dayPartAt,
+  emptyCatStat,
+  type CatStat,
+} from '../constants/catLore';
 import type { CatSpec } from '../constants/catSprites';
 import {
   getPlant,
@@ -220,6 +228,20 @@ export interface CafeState {
    * café.
    */
   ownedCats: string[];
+  /**
+   * What the almanac remembers about each owned cat: when it arrived, and a
+   * four-slot tally of when you've served it. Keyed by cat id and kept in step
+   * with `ownedCats` by `backfillCatStats` on load, so no owned cat can lack a
+   * record. Everything else in an almanac entry is derived from the sprite and
+   * needs no storage at all.
+   */
+  catStats: Record<string, CatStat>;
+  /**
+   * Recipes on the menu. A drink that isn't in here can't be brewed and shows
+   * locked in the almanac — the roster in `drinks.ts` is the catalogue, this
+   * is what you actually own of it.
+   */
+  recipes: DrinkId[];
   // true while an adoption reveal is on screen, so the guide overlay stays out
   // of the way. Never persisted across restarts, same as focusSessionActive.
   revealActive: boolean;
@@ -231,8 +253,8 @@ export interface CafeState {
  * The outcome of an adoption attempt. A failure says why so the shelter can
  * show the right thing — you can't afford it, or there's nobody left to adopt.
  */
-export type AdoptResult =
-  | { ok: true; cat: CatSpec }
+export type PullResult =
+  | { ok: true; prize: Prize }
   | { ok: false; reason: 'coins' | 'complete' };
 
 const STORAGE_KEY = '@focus_cafe_state_v2';
@@ -311,6 +333,8 @@ const initialState: CafeState = {
   focusTimer: idleFocusTimer(),
   claimedAchievements: [],
   ownedCats: [...STARTER_CATS],
+  catStats: backfillCatStats(undefined, STARTER_CATS),
+  recipes: [...STARTER_RECIPES],
   revealActive: false,
   greenhouse: {
     plants: [],
@@ -615,7 +639,8 @@ type CafeContextType = {
   muteGuideMessage: (id: string) => void;
   setFocusSessionActive: (active: boolean) => void;
   claimAchievement: (achievementId: string, pearlReward: number) => boolean;
-  adoptCat: () => AdoptResult;
+  pullPrize: () => PullResult;
+  recordCatsServed: (catIds: string[]) => void;
   setRevealActive: (active: boolean) => void;
   buySeed: (speciesId: string) => boolean;
   plantSeed: (speciesId: string, slot: number) => PlantResult;
@@ -711,6 +736,13 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
             ownedCats: Array.isArray(parsed.ownedCats)
               ? parsed.ownedCats
               : seedOwnedCats(parsed.unlockedItems ?? []),
+            // Saves from before recipes were ownable open with the starter
+            // menu, same as a fresh one. Filtered against the roster because a
+            // save can outlive a recipe id, and an unknown id would sit in the
+            // menu as a cup with no spec behind it.
+            recipes: Array.isArray(parsed.recipes)
+              ? (parsed.recipes as DrinkId[]).filter((id) => !!DRINKS[id])
+              : [...STARTER_RECIPES],
             // Saves from before the greenhouse existed get a fresh one, free
             // starter seed included. The nested spread matters: a partial
             // greenhouse from a future rollback would otherwise arrive without
@@ -731,6 +763,14 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
             revealActive: false,
           };
         }
+
+        // Rebuilt from `ownedCats` rather than trusted from the save, so a
+        // collection seeded by `seedOwnedCats` — or any cat adopted before
+        // this field existed — still gets a record to hang facts off.
+        merged = {
+          ...merged,
+          catStats: backfillCatStats(merged.catStats, merged.ownedCats),
+        };
 
         const todayKey = getTodayDateKey();
         const previousOpenDateKey = merged.guide.lastOpenedDate;
@@ -1561,50 +1601,112 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
     [commit]
   );
 
-  const adoptCat = useCallback((): AdoptResult => {
-    // The draw is decided here, against the mirror, rather than inside the
-    // updater. The caller is waiting on this result to play a reveal, so it
-    // can't depend on whether React ran the updater eagerly or deferred it —
-    // a deferred updater would report "you can't afford this" for an adoption
-    // that actually went through, losing the cat's reveal.
+  /**
+   * One turn of the crank: a cat or a recipe, decided by the draw.
+   *
+   * The draw happens here, against the mirror, rather than inside the updater.
+   * The caller is waiting on this result to play a reveal, so it can't depend
+   * on whether React ran the updater eagerly or deferred it — a deferred
+   * updater would report "you can't afford this" for a pull that actually went
+   * through, losing the reveal.
+   */
+  const pullPrize = useCallback((): PullResult => {
     const current = stateRef.current;
 
-    const cost = adoptionCost(current.ownedCats.length);
+    const cost = pullCost(current.ownedCats.length, current.recipes.length);
     if (current.coins < cost) return { ok: false, reason: 'coins' };
 
-    const cat = pickCat(current.ownedCats, Math.random(), Math.random());
-    if (!cat) return { ok: false, reason: 'complete' };
+    const prize = pickPrize(
+      current.ownedCats,
+      current.recipes,
+      Math.random(),
+      Math.random(),
+      Math.random()
+    );
+    if (!prize) return { ok: false, reason: 'complete' };
+
+    // A cat needs an almanac record the moment it arrives; a recipe carries no
+    // per-entry state at all, which is the only place the two halves differ.
+    const adoptedOn = getTodayDateKey();
+
+    /** The half of the state this prize touches, off whatever base is given. */
+    const grant = (base: CafeState): CafeState =>
+      prize.kind === 'cat'
+        ? {
+            ...base,
+            ownedCats: [...base.ownedCats, prize.cat.id],
+            catStats: {
+              ...base.catStats,
+              [prize.cat.id]: emptyCatStat(adoptedOn),
+            },
+          }
+        : { ...base, recipes: [...base.recipes, prize.drink.id] };
+
+    const alreadyHas = (base: CafeState): boolean =>
+      prize.kind === 'cat'
+        ? base.ownedCats.includes(prize.cat.id)
+        : base.recipes.includes(prize.drink.id);
 
     // Advance the mirror before committing so a second tap in the same frame
     // draws against the spend that's already in flight instead of stale coins.
     // The effect above resyncs it from the real state on the next render.
-    stateRef.current = {
-      ...current,
-      coins: current.coins - cost,
-      ownedCats: [...current.ownedCats, cat.id],
-    };
+    stateRef.current = grant({ ...current, coins: current.coins - cost });
 
     // Spending and granting are one commit — composing spendCoins() with a
     // separate unlock would leave a window where the coins are gone and the
-    // cat isn't in the collection yet. `prev` is the authority: the mirror can
-    // lag, so re-check against it before charging anyone.
+    // prize isn't in the collection yet. `prev` is the authority: the mirror
+    // can lag, so re-check against it before charging anyone.
     commit((prev) => {
       // Priced off `prev`, not the `cost` computed above: the mirror can lag,
-      // and now that the price climbs with the collection, charging a stale
-      // one would undercharge for an adoption that landed after another.
-      const prevCost = adoptionCost(prev.ownedCats.length);
-      if (prev.coins < prevCost || prev.ownedCats.includes(cat.id)) {
-        return prev;
-      }
-      return {
-        ...prev,
-        coins: prev.coins - prevCost,
-        ownedCats: [...prev.ownedCats, cat.id],
-      };
+      // and since the price climbs with the collection, charging a stale one
+      // would undercharge for a pull that landed after another.
+      const prevCost = pullCost(prev.ownedCats.length, prev.recipes.length);
+      if (prev.coins < prevCost || alreadyHas(prev)) return prev;
+      return grant({ ...prev, coins: prev.coins - prevCost });
     });
 
-    return { ok: true, cat };
+    return { ok: true, prize };
   }, [commit]);
+
+  /**
+   * Tallies a round of cups against the cats that drank them.
+   *
+   * Takes the whole group in one commit rather than one call per cat: the café
+   * serves a group at a time, and N separate updaters would each rebuild the
+   * map off a `prev` that may not include the last one yet.
+   *
+   * The hour is read here rather than passed in because there is exactly one
+   * moment being recorded — the serve — and letting the caller supply a clock
+   * is how the tally ends up disagreeing with `dateKey`.
+   */
+  const recordCatsServed = useCallback(
+    (catIds: string[]) => {
+      if (!catIds.length) return;
+
+      const dateKey = getTodayDateKey();
+      const part = dayPartAt(new Date().getHours());
+
+      commit((prev) => {
+        const catStats = { ...prev.catStats };
+
+        for (const id of catIds) {
+          // A cat with no record is one the café is drawing but the collection
+          // has never seen. That shouldn't happen — the spawner picks from
+          // ownedCats — so open a record rather than dropping the cup.
+          const prior = catStats[id] ?? emptyCatStat(null);
+          catStats[id] = {
+            ...prior,
+            firstServedOn: prior.firstServedOn ?? dateKey,
+            lastServedOn: dateKey,
+            parts: { ...prior.parts, [part]: (prior.parts[part] ?? 0) + 1 },
+          };
+        }
+
+        return { ...prev, catStats };
+      });
+    },
+    [commit]
+  );
 
   /* ---------------------------- the greenhouse --------------------------- */
 
@@ -1614,7 +1716,7 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
       if (!spec) return false;
 
       // Answer from the mirror, not from inside the updater, for the same
-      // reason `plantSeed` and `adoptCat` do: the caller flashes a message off
+      // reason `plantSeed` and `pullPrize` do: the caller flashes a message off
       // this result, and React only runs an updater eagerly while its queue is
       // empty. With anything else already queued the flag was still false when
       // we returned it, so a purchase that went through reported "not enough
@@ -1652,7 +1754,7 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
     (speciesId: string, slot: number): PlantResult => {
       const todayKey = getTodayDateKey();
       // Decided against the mirror rather than inside the updater, for the same
-      // reason `adoptCat` does: the caller animates the result, so it can't
+      // reason `pullPrize` does: the caller animates the result, so it can't
       // depend on whether React ran the updater eagerly or deferred it.
       const current = stateRef.current;
       const gh = current.greenhouse;
@@ -1872,7 +1974,8 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
         muteGuideMessage,
         setFocusSessionActive,
         claimAchievement,
-        adoptCat,
+        pullPrize,
+        recordCatsServed,
         setRevealActive,
         buySeed,
         plantSeed,

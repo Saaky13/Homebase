@@ -1,5 +1,5 @@
 import React from 'react';
-import { Image, type ImageStyle, type StyleProp } from 'react-native';
+import type { StyleProp, ViewStyle } from 'react-native';
 
 import {
   getCat,
@@ -7,15 +7,18 @@ import {
   PALETTES,
   type Direction,
 } from '../constants/catSprites';
-import { gridToSvgUri, type PixelPalette } from '../utils/pixelSvg';
+import { gridToPaths, type PixelPalette, type PixelPaths } from '../utils/pixelSvg';
+import { PixelSprite } from './PixelSprite';
 
 /**
- * Draws a roster cat as a plain <Image>.
+ * Draws a roster cat in an ordinary layout — no canvas, no Skia, no measuring.
  *
- * The café and the town map rasterise these grids onto a canvas; React has had
- * no way to show one until now. Routing the grid through the same SVG data-URI
- * trick the currency icons use means a cat can sit in an ordinary layout with
- * no canvas, no Skia, and no measuring.
+ * The café and the town map rasterise these grids onto a canvas; this is the
+ * React path, used by the shelter's collection, the adoption reveal and the
+ * almanac. It draws through `PixelSprite` (real <Path> elements) rather than
+ * the SVG data-URI it used to use, because a data-URI in a React Native
+ * <Image> renders nothing at all on iOS and Android — see the note in
+ * `utils/pixelSvg.ts`.
  */
 
 /**
@@ -36,38 +39,34 @@ const SILHOUETTE: PixelPalette = {
   O: '#B9AFA6',
 };
 
-type Sprite = { uri: string; width: number; height: number };
-
-// Built once per cat/direction/state and kept. A full collection screen is 36
-// sprites, and re-encoding a few hundred rects on every scroll frame would be
+// Built once per cat/direction/state and kept. A collection screen is 36
+// sprites, and walking a thousand-cell grid on every scroll frame would be
 // wasteful for art that never changes.
-const spriteCache = new Map<string, Sprite | null>();
+const pathCache = new Map<string, PixelPaths | null>();
 
-export function getCatSprite(
+export function getCatPaths(
   catId: string,
   direction: Direction = 'front',
   locked = false
-): Sprite | null {
+): PixelPaths | null {
   const key = `${catId}:${direction}:${locked ? 'locked' : 'lit'}`;
 
-  const cached = spriteCache.get(key);
+  const cached = pathCache.get(key);
   if (cached !== undefined) return cached;
 
   const spec = getCat(catId);
   if (!spec) {
-    spriteCache.set(key, null);
+    pathCache.set(key, null);
     return null;
   }
 
-  const grid = getCatGrid(spec, direction);
-  const sprite: Sprite = {
-    uri: gridToSvgUri(grid, locked ? SILHOUETTE : PALETTES[spec.palette]),
-    width: grid[0]?.length ?? 0,
-    height: grid.length,
-  };
+  const paths = gridToPaths(
+    getCatGrid(spec, direction),
+    locked ? SILHOUETTE : PALETTES[spec.palette]
+  );
 
-  spriteCache.set(key, sprite);
-  return sprite;
+  pathCache.set(key, paths);
+  return paths;
 }
 
 export function CatSprite({
@@ -82,20 +81,17 @@ export function CatSprite({
   size?: number;
   direction?: Direction;
   locked?: boolean;
-  style?: StyleProp<ImageStyle>;
+  style?: StyleProp<ViewStyle>;
 }) {
-  const sprite = getCatSprite(catId, direction, locked);
-  if (!sprite || !sprite.width) return null;
-
-  // Cat grids are taller than they are wide (28x37). Deriving the height from
-  // the grid rather than assuming a square keeps them from being squashed.
-  const height = Math.round(size * (sprite.height / sprite.width));
+  const paths = getCatPaths(catId, direction, locked);
+  if (!paths) return null;
 
   return (
-    <Image
-      source={{ uri: sprite.uri }}
-      style={[{ width: size, height }, style]}
-      accessibilityLabel={locked ? 'undiscovered cat' : (getCat(catId)?.name ?? 'cat')}
+    <PixelSprite
+      paths={paths}
+      width={size}
+      label={locked ? 'undiscovered cat' : (getCat(catId)?.name ?? 'cat')}
+      style={style}
     />
   );
 }
