@@ -16,7 +16,7 @@
  */
 
 import type { MiniDirection } from '../constants/catSprites';
-import { BUILDINGS, GREENHOUSE, MAP_H, MAP_W, type Tile } from './map';
+import { BUILDINGS, FOUNTAIN_TILES, GREENHOUSE, MAP_H, MAP_W, type Tile } from './map';
 
 /** Stone, road, and the paved empty plots. */
 const WALKABLE = new Set(['S', 'R', 'o']);
@@ -50,6 +50,9 @@ function buildingTiles(): Set<string> {
   };
   for (const b of BUILDINGS) add(b.tx, b.ty, b.tw, b.th);
   add(GREENHOUSE.tx, GREENHOUSE.ty, GREENHOUSE.tw, GREENHOUSE.th);
+  // The basin is stone, and stone is walkable — without this cats wade
+  // straight through the middle of the biggest landmark in town.
+  add(FOUNTAIN_TILES.tx, FOUNTAIN_TILES.ty, FOUNTAIN_TILES.tw, FOUNTAIN_TILES.th);
   solidTiles = s;
   return s;
 }
