@@ -10,11 +10,28 @@ import {
 } from 'react-native';
 
 import { CatSprite } from './CatSprite';
+import { CupSprite } from './CupSprite';
+import { catsFavoring, preferencesFor } from '../constants/affinity';
+import { DRINKS } from '../constants/drinks';
+import type { Prize } from '../constants/gacha';
 import { CoinIcon } from './Icons';
-import { RARITY_STYLE, type CatSpec } from '../constants/catSprites';
+import { RARITY_STYLE, type Rarity } from '../constants/catSprites';
 import { colors } from '../constants/colors';
 
-/** Longer, more syncopated buzz the rarer the cat. */
+/**
+ * How much a drink twinkles. Cats carry their own `sparkles` count as part of
+ * the sprite; a recipe has no sprite to hang one off, so the rarity decides —
+ * and only the top two get any, which is what keeps them meaning something.
+ */
+const DRINK_SPARKLES: Record<Rarity, number> = {
+  common: 0,
+  rare: 0,
+  epic: 0,
+  legendary: 5,
+  ultra: 9,
+};
+
+/** Longer, more syncopated buzz the rarer the prize. */
 const HAPTICS: Record<string, number[]> = {
   common: [0, 40],
   rare: [0, 50, 90, 50],
@@ -94,35 +111,47 @@ function Sparkles({ count, color }: { count: number; color: string }) {
 }
 
 export default function AdoptionReveal({
-  cat,
+  prize,
+  ownedCats,
+  recipes,
   coins,
   cost,
   remaining,
   onClose,
-  onAdoptAgain,
+  onAgain,
 }: {
-  /** The cat just adopted, or null when nothing is being revealed. */
-  cat: CatSpec | null;
+  /** What the crank just produced, or null when nothing is being revealed. */
+  prize: Prize | null;
+  /** So a drink's admirers can show which of them you actually have. */
+  ownedCats: string[];
+  /** So a cat's favourite can say whether you can actually pour it. */
+  recipes: string[];
   coins: number;
-  /** Price of the *next* adoption, which climbs as the collection grows. */
+  /** Price of the *next* pull of this kind, which climbs as you collect. */
   cost: number;
-  /** How many cats are still unadopted, so the footer can adapt. */
+  /** How many of this kind are still unpulled, so the footer can adapt. */
   remaining: number;
   onClose: () => void;
-  onAdoptAgain: () => void;
+  onAgain: () => void;
 }) {
-  // Kept separate from `cat` so the exit animation has something to play
+  // Kept separate from `prize` so the exit animation has something to play
   // against. GuideOverlay returns null the moment its flag flips, which is why
   // its own exit animation never actually runs.
-  const [shown, setShown] = useState<CatSpec | null>(null);
+  const [shown, setShown] = useState<Prize | null>(null);
 
   const scrim = useRef(new Animated.Value(0)).current;
   const pop = useRef(new Animated.Value(0)).current;
 
+  const rarity = prize
+    ? prize.kind === 'cat'
+      ? prize.cat.rarity
+      : prize.drink.rarity
+    : null;
+
   useEffect(() => {
-    if (cat) {
-      setShown(cat);
-      Vibration.vibrate(HAPTICS[cat.rarity] ?? HAPTICS.common);
+    if (prize) {
+      setShown(prize);
+      Vibration.vibrate(HAPTICS[rarity ?? 'common'] ?? HAPTICS.common);
       scrim.setValue(0);
       pop.setValue(0);
       Animated.parallel([
@@ -159,12 +188,15 @@ export default function AdoptionReveal({
     });
 
     return () => clearTimeout(fallback);
-  }, [cat, shown, scrim, pop]);
+  }, [prize, rarity, shown, scrim, pop]);
 
   if (!shown) return null;
 
-  const style = RARITY_STYLE[shown.rarity];
-  const canAdoptAgain = coins >= cost && remaining > 0;
+  const isCat = shown.kind === 'cat';
+  const shownRarity = isCat ? shown.cat.rarity : shown.drink.rarity;
+  const style = RARITY_STYLE[shownRarity];
+  const sparkles = isCat ? shown.cat.sparkles : DRINK_SPARKLES[shownRarity];
+  const canPullAgain = coins >= cost && remaining > 0;
 
   return (
     <Animated.View style={[styles.scrim, { opacity: scrim }]} pointerEvents="auto">
@@ -190,31 +222,86 @@ export default function AdoptionReveal({
         </Text>
 
         <View style={styles.stage}>
-          {!!shown.sparkles && (
-            <Sparkles count={shown.sparkles} color={style.ring} />
+          {!!sparkles && <Sparkles count={sparkles} color={style.ring} />}
+          {shown.kind === 'cat' ? (
+            <CatSprite catId={shown.cat.id} size={128} />
+          ) : (
+            <CupSprite drink={shown.drink.id} width={86} />
           )}
-          <CatSprite catId={shown.id} size={128} />
         </View>
 
-        <Text style={styles.name}>{shown.name}</Text>
-        <Text style={styles.blurb}>
-          {shown.name} is settling into town. Say hello on the map.
-        </Text>
+        {shown.kind === 'cat' ? (
+          <>
+            <Text style={styles.name}>{shown.cat.name}</Text>
+            <Text style={styles.blurb}>
+              {shown.cat.name} is settling into town. Say hello on the map.
+            </Text>
+
+            {/* The first thing worth knowing about a cat you just pulled. A
+                legendary whose drink you don't own yet is the next thing you
+                want, which is the whole point of showing it here. */}
+            <View style={[styles.lovesRow, { borderColor: style.ring }]}>
+              <CupSprite drink={preferencesFor(shown.cat).favorite} width={22} />
+              <View>
+                <Text style={styles.lovesLabel}>LOVES</Text>
+                <Text style={styles.lovesName}>
+                  {DRINKS[preferencesFor(shown.cat).favorite].name}
+                </Text>
+                {/* The pull that sells the next pull. A cat arriving with a
+                    drink you can't pour is the clearest reason the machine
+                    has a second hopper. */}
+                {!recipes.includes(preferencesFor(shown.cat).favorite) && (
+                  <Text style={styles.lovesMissing}>not on your menu yet</Text>
+                )}
+              </View>
+            </View>
+          </>
+        ) : (
+          <>
+            <Text style={styles.name}>{shown.drink.name}</Text>
+            <Text style={styles.blurb}>{shown.drink.note}</Text>
+
+            {/* The mirror of the cat card's LOVES row: which of your cats have
+                been waiting for this. An empty row is information too — you
+                pulled a recipe nobody you own wants yet. */}
+            <View style={[styles.lovesRow, { borderColor: style.ring }]}>
+              <View>
+                <Text style={styles.lovesLabel}>ON THE MENU</Text>
+                <Text style={styles.lovesName}>
+                  {shown.drink.pearls} pearls · {shown.drink.baseCoins} coins
+                </Text>
+              </View>
+            </View>
+
+            <View style={styles.fanRow}>
+              {catsFavoring(shown.drink.id).map((fan) => (
+                <CatSprite
+                  key={fan.id}
+                  catId={fan.id}
+                  size={30}
+                  locked={!ownedCats.includes(fan.id)}
+                />
+              ))}
+            </View>
+          </>
+        )}
 
         <View style={styles.actions}>
           <Pressable
-            onPress={onAdoptAgain}
-            disabled={!canAdoptAgain}
+            onPress={onAgain}
+            disabled={!canPullAgain}
             // Deliberately not the rarity ring: Common's ring is a neutral grey,
             // which made a live button look disabled.
             style={({ pressed }) => [
               styles.primary,
-              !canAdoptAgain && styles.disabled,
-              pressed && canAdoptAgain && styles.pressed,
+              !canPullAgain && styles.disabled,
+              pressed && canPullAgain && styles.pressed,
             ]}
           >
-            <Text style={styles.primaryText}>Adopt again</Text>
-            {canAdoptAgain && (
+            <Text style={styles.primaryText}>
+              {isCat ? 'Adopt again' : 'Brew again'}
+            </Text>
+            {canPullAgain && (
               <View style={styles.costRow}>
                 <CoinIcon size={12} />
                 <Text style={styles.costText}>{cost}</Text>
@@ -276,6 +363,33 @@ const styles = StyleSheet.create({
     borderRadius: 4,
   },
   name: { fontSize: 26, fontWeight: '900', color: colors.brown900 },
+  lovesRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 9,
+    alignSelf: 'center',
+    paddingVertical: 7,
+    paddingHorizontal: 13,
+    borderRadius: 13,
+    borderWidth: 1.5,
+    backgroundColor: colors.paper,
+    marginTop: 12,
+  },
+  lovesLabel: {
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 0.8,
+    color: colors.mediumGray,
+  },
+  lovesName: { fontSize: 13, fontWeight: '800', color: colors.brown900 },
+  lovesMissing: { fontSize: 10, fontWeight: '700', color: colors.coral },
+  fanRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    gap: 4,
+    marginTop: 10,
+  },
   blurb: {
     fontSize: 13,
     color: colors.brown700,

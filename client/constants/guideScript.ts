@@ -1,5 +1,5 @@
 import type { CafeState } from '../hooks/useCafeState';
-import { adoptionCost } from './gacha';
+import { pullCost } from './gacha';
 import { computeHabitStreak } from '../utils/date';
 
 export interface GuideContext {
@@ -267,7 +267,7 @@ export const GUIDE_SCRIPT: GuideBeat[] = [
     // opens at 10 coins and climbs to a 100 ceiling, and this copy claimed a
     // flat 100 long after that stopped being true.
     message: (ctx) =>
-      `${adoptionCost(ctx.state.ownedCats.length)} coins turns the crank, and you'll never pull a cat you already have. everyone you adopt moves in — wandering the town, dropping by the café. and yes, I'm somewhere on that list. no pressure.`,
+      `${pullCost(ctx.state.ownedCats.length, ctx.state.recipes?.length ?? 0)} coins turns the crank, and you'll never pull a cat — or a recipe — you already have. everyone you adopt moves in — wandering the town, dropping by the café. and yes, I'm somewhere on that list. no pressure.`,
     match: (ctx) => ctx.pathname.includes('/cats'),
   },
   {

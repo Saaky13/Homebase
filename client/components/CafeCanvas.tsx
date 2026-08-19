@@ -7,7 +7,9 @@ import {
   Dimensions,
   Easing,
   PanResponder,
+  Pressable,
   type LayoutChangeEvent,
+  type GestureResponderEvent,
 } from 'react-native';
 import { Canvas, Group, Picture, Skia } from '@shopify/react-native-skia';
 import { useSharedValue } from 'react-native-reanimated';
@@ -38,6 +40,8 @@ import { spawnIntervalMs, maxGroupSize } from '../constants/popularity';
 import BobaCupSprite, { CUP_ASPECT } from './BobaCupSprite';
 import type { BobaFlavor } from '../constants/bobaCup';
 import { PearlIcon } from './Icons';
+import { getCat } from '../constants/catSprites';
+import CatAlmanacSheet from './CatAlmanacSheet';
 
 type Table = {
   id: string;
@@ -95,8 +99,12 @@ export default function CafeCanvas() {
   const [serveCost, setServeCost] = useState(0);
   const [dragging, setDragging] = useState(false);
   const [night, setNight] = useState(() => isNightAt());
+  // Which cat, if any, is currently showing its preferences. Just the roster
+  // id — the sheet resolves it back to a CatSpec at render time.
+  const [inspectedCatId, setInspectedCatId] = useState<string | null>(null);
 
-  const { state, addCoins, spendPearls, addDrinkServed } = useCafeState();
+  const { state, addCoins, spendPearls, addDrinkServed, recordCatsServed } =
+    useCafeState();
 
   const scale = Math.min(layout.width / DESIGN_WIDTH, MAX_SCALE);
   // Snapped to the art grid so the floorboard courses don't land on half pixels.
@@ -260,6 +268,8 @@ export default function CafeCanvas() {
 
     const allSeats = getSeatSpots();
 
+    const servedIds: string[] = [];
+
     front.forEach((cat, index) => {
       const seatIndex = seats[index];
       const seat = allSeats[seatIndex];
@@ -270,7 +280,13 @@ export default function CafeCanvas() {
       cat.drink = flavorRef.current;
       addCoins(25);
       addDrinkServed(1);
+      servedIds.push(cat.catId);
     });
+
+    // One commit for the whole group — see recordCatsServed. Only the cats
+    // that actually got a seat are counted, which is why this collects inside
+    // the loop rather than mapping `front` up front.
+    recordCatsServed(servedIds);
 
     return true;
   };
@@ -550,6 +566,48 @@ export default function CafeCanvas() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  /** How close a tap has to land to a cat, in design units, to inspect it. */
+  const INSPECT_RADIUS = 30;
+
+  /**
+   * Tap the floor: find the nearest stationary cat and show its preferences.
+   *
+   * `locationX`/`locationY` are the natural way to read a `Pressable` tap
+   * position, but react-native-web's `Pressable` never populates them on
+   * `onPress` — only native does. `clientX`/`clientY` are always there
+   * (they're the underlying DOM event), so the tap position is read off
+   * those instead, measured against the tapped element's own rect rather
+   * than the layout-derived `scaleRef.offsetX`, which is a canvas-internal
+   * offset, not a screen one.
+   */
+  const handleInspectTap = useCallback((e: GestureResponderEvent) => {
+    const native = e.nativeEvent as unknown as { clientX?: number; clientY?: number };
+    const target = e.currentTarget as unknown as { getBoundingClientRect?: () => DOMRect };
+    const rect = target?.getBoundingClientRect?.();
+    if (native.clientX == null || native.clientY == null || !rect) return;
+
+    const view = scaleRef.current;
+    const x = (native.clientX - rect.left - view.offsetX) / view.scale;
+    const y = (native.clientY - rect.top) / view.scale;
+
+    let best: Cat | null = null;
+    let bestDist = INSPECT_RADIUS;
+
+    // Only cats standing still are worth inspecting — one mid-walk to a seat
+    // or on its way out is gone again before the sheet could settle on it.
+    catsRef.current.forEach((cat) => {
+      if (cat.state !== 'waiting' && cat.state !== 'seated') return;
+      const dist = Math.hypot(cat.x - x, cat.y - y);
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = cat;
+      }
+    });
+
+    setInspectedCatId(best ? (best as Cat).catId : null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const springHome = useCallback(() => {
     Animated.spring(pan, {
       toValue: { x: 0, y: 0 },
@@ -605,6 +663,8 @@ export default function CafeCanvas() {
     if (width > 0 && height > 0) setLayout({ width, height });
   };
 
+  const inspectedCat = inspectedCatId ? getCat(inspectedCatId) ?? null : null;
+
   return (
     <View style={styles.container} onLayout={handleLayout}>
       <Canvas style={styles.fill}>
@@ -612,6 +672,11 @@ export default function CafeCanvas() {
           <Picture picture={picture} />
         </Group>
       </Canvas>
+
+      {/* Tap a waiting or seated cat to see what it likes. Sits beneath the
+          cup's PanResponder in the tree, so an overlapping drag still wins —
+          this only ever fires as a plain tap. */}
+      <Pressable style={styles.fill} onPress={handleInspectTap} />
 
       {/* Serving is a gesture, not a button: pick the cup up off the counter
           and hand it to the cat at the front of the line. */}
@@ -657,6 +722,15 @@ export default function CafeCanvas() {
           </View>
         </View>
       )}
+
+      <CatAlmanacSheet
+        cat={inspectedCat}
+        owned
+        stat={inspectedCatId ? state.catStats?.[inspectedCatId] : null}
+        ownedIds={state.ownedCats}
+        recipes={state.recipes ?? []}
+        onClose={() => setInspectedCatId(null)}
+      />
     </View>
   );
 }

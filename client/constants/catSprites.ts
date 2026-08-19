@@ -119,7 +119,7 @@ export type PaletteName = keyof typeof PALETTES;
 /** Minimum brightness gap between body (B) and chest (W). See assertPalettes. */
 export const PALETTE_MIN_CONTRAST = 0.18;
 
-function luminance(hex: string): number {
+export function luminance(hex: string): number {
   const n = parseInt(hex.slice(1), 16);
   const r = (n >> 16) & 255;
   const g = (n >> 8) & 255;
