@@ -370,51 +370,61 @@ should be ephemeral.
 
 ## 9. The inspect card
 
-**A simplified version of this shipped early**, on both the café floor and the
-town map: tap a waiting or seated cat (café) or a roaming one (town) and the
-full `CatAlmanacSheet` opens as a bottom sheet, not the compact anchored card
-below. There's no bond level or brewed-recipe payout to show yet — those need
-Phase 1 (the rail) and Phase 4 (bond) — so the full sheet has everything the
-small card would and nothing it wouldn't. The spec below is what the card
-becomes once those exist; the hit-testing it describes is already built for
-both surfaces (café: `CafeCanvas.tsx`'s `handleInspectTap`; town:
-`TownMap.tsx`'s, against the live `Roamer` array).
+**This shipped early**, on both the café floor and the town map, as
+`components/CatInspectCard.tsx`. Two rows below are still missing because the
+data behind them doesn't exist: bond (Phase 4) and the brewed-recipe payout
+(Phase 1). They slot into a card that is otherwise the one described here.
 
-Tap any cat in the queue — or seated — and a card opens anchored above its head.
+The card is positioned by `anchorCard()`, which both surfaces share so they
+can't drift on which side of a cat it lands. Position is written straight to
+`Animated.Value`s from inside each surface's `requestAnimationFrame` loop —
+both loops exist precisely to avoid re-rendering React per frame, and passing
+the position as a prop would re-render the card (and, in the café, its canvas
+host) on every frame of a cat's walk.
 
-This is the same component as the almanac's entry body, at a smaller size. Tap
-to read, drag to act; the two gestures never fight because one targets a cat and
-the other targets the cup.
+Hit-testing lives with each renderer: café in `CafeCanvas.tsx`'s
+`handleInspectTap`, town in `TownMap.tsx`'s, against the live `Roamer` array
+via the shared `roamerBox()`.
+
+Tap any cat that isn't leaving — queued, mid-shuffle, or seated — and a card
+opens anchored above its head (or below its feet when the counter leaves no
+room above; the tail flips edges with it).
+
+Tap to read, drag to act; the two gestures never fight because one targets a
+cat and the other targets the cup.
 
 ```
-        ┌──────────────────────────────┐
-        │ 🐱   KOI              ★rare  │
-        │      Bond 3  ●●●○○   +10%    │
-        ├──────────────────────────────┤
-        │ Loves    🥤 Sea Salt Cream   │
-        │ Likes    🥤 Matcha  🥤 Taro  │
-        │ Dislikes 🥤 Brown Sugar      │
-        ├──────────────────────────────┤
-        │ Brewed: Matcha    +58 ♥      │
-        └──────────────┬───────────────┘
-                      🐱
+        ┌────────────────────────────────────────┐
+        │ 🐱 KOI            ★rare   [ALMANAC ›]  │
+        ├────────────────────────────────────────┤
+        │ LOVES                                  │
+        │ 🥤 Sea Salt Cream   not on your menu 6◆│
+        │ LIKES              │ WON'T DRINK       │
+        │ 🥤 Matcha       3◆ │ 🥤 Brown Sugar    │
+        │ 🥤 Taro          – │ 🥤 Espresso       │
+        │  … 6 rows          │  … up to 4 rows   │
+        └────────────────────┬───────────────────┘
+                            🐱
 ```
 
 | Row | Content |
 |---|---|
-| Header | Mini sprite (28pt, `getMiniCatGrid`), name, rarity chip |
-| Bond | Level, 5-dot progress, current tip % |
-| Preferences | Favorite / likes / dislikes, **stated outright** — the almanac gives the answer, so does this |
-| Footer | What the currently brewed recipe would pay this cat |
+| Header | Mini sprite, name, rarity chip, `ALMANAC ›` button (deep-links `/cats?cat=id`, which lands on the Almanac tab with this cat's sheet open) |
+| Loves | The favorite as a hero row — pearl cost, plus "not on your menu" when unbrewable |
+| Likes / Won't drink | Two side-by-side columns of `short` names; likes carry pearl costs (`–` when locked), dislikes are dimmed and priceless — they never get poured |
 
-**Geometry.** 208 × 132pt, anchored so its bottom edge sits 8pt above the cat's
-head at `screenY = cat.y * scale - 58 * scale`. Clamped to stay 8pt inside the
-canvas on all sides — a cat at the top of the queue would otherwise push the card
-under the TopBar.
+The bond row and the brewed-payout footer are still missing because the data
+behind them doesn't exist: bond (Phase 4), brew (Phase 1).
+
+**Geometry.** 268 wide × ~220 tall, **frosted** — `rgba` paper with a web
+`backdropFilter` blur, so the queue it describes stays visible through it.
+Wide-and-short beat the first tall single-column cut because how much a card
+blocks is mostly opacity, not area. Clamped 8pt inside the canvas on all sides.
 
 **Dismissal.** Tap anywhere else, tap the same cat again, or start a drag. It
 also auto-dismisses if its cat leaves. No close button; a card this size that
-follows a tap should not need chrome.
+follows a tap should not need chrome. The card root is `box-none` so the
+almanac button can take a press; the body has no handlers.
 
 **Hit-testing.** The canvas has no touch handling today. Add a full-canvas
 `Pressable` *beneath* the cup and rail overlays, converting the touch point to
@@ -512,7 +522,7 @@ CafeCanvas
 | `constants/bobaCup.ts` | `BobaFlavor` union widens to the 14 drink ids; `BOBA_PALETTE` gains 11 entries |
 | `components/RecipeRail.tsx` | **New.** The rail and its cells |
 | `components/PayoutBadge.tsx` | **New.** One badge |
-| `components/CatInspectCard.tsx` | **New.** Shared with the almanac entry body |
+| `components/CatInspectCard.tsx` | **New.** The frosted anchored card; its `ALMANAC ›` button deep-links to the full sheet |
 | `components/StreakCounter.tsx` | **New.** |
 | `components/CafeCanvas.tsx` | Loaded-recipe state, brew sequence, widened drop targeting, per-drink cost, streak ref, canvas hit-testing |
 | `components/cafeRender.ts` | `drawWantBubble` takes a drink + owned flag; new `drawSteam` |

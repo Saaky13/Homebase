@@ -11,6 +11,7 @@ import {
   type LayoutChangeEvent,
   type GestureResponderEvent,
 } from 'react-native';
+import { useRouter } from 'expo-router';
 import { Canvas, Group, Picture, Skia } from '@shopify/react-native-skia';
 import { useSharedValue } from 'react-native-reanimated';
 import { useCafeState } from '../hooks/useCafeState';
@@ -41,7 +42,8 @@ import BobaCupSprite, { CUP_ASPECT } from './BobaCupSprite';
 import type { BobaFlavor } from '../constants/bobaCup';
 import { PearlIcon } from './Icons';
 import { getCat } from '../constants/catSprites';
-import CatAlmanacSheet from './CatAlmanacSheet';
+import CatInspectCard, { CARD_H_ESTIMATE, anchorCard } from './CatInspectCard';
+import { catAspectRatio } from './catImageCache';
 
 type Table = {
   id: string;
@@ -66,6 +68,21 @@ const CUP_HEIGHT = CUP_WIDTH * CUP_ASPECT;
 /** How close the cup has to get, in design units, before a cat counts as hit. */
 const DROP_RADIUS = 52;
 const PEARLS_PER_CAT = 5;
+
+/**
+ * Whether a cat will answer a tap.
+ *
+ * Everything but a cat on its way out. It is tempting to restrict this to
+ * `waiting` and `seated` — the cats that hold still — but the queue does not
+ * work that way: `retargetCat` puts every cat back into `walkingToLine` each
+ * time the line shuffles forward, so a cat standing in the queue spends much
+ * of its time in a walking state. Gating on stillness meant taps on queued
+ * cats mostly did nothing, and an open card vanished the instant the line
+ * moved. The card follows a walking cat perfectly well.
+ */
+function isInspectable(cat: Cat) {
+  return cat.state !== 'leaving';
+}
 
 export default function CafeCanvas() {
   const catsRef = useRef<Cat[]>([]);
@@ -99,9 +116,28 @@ export default function CafeCanvas() {
   const [serveCost, setServeCost] = useState(0);
   const [dragging, setDragging] = useState(false);
   const [night, setNight] = useState(() => isNightAt());
-  // Which cat, if any, is currently showing its preferences. Just the roster
-  // id — the sheet resolves it back to a CatSpec at render time.
-  const [inspectedCatId, setInspectedCatId] = useState<string | null>(null);
+
+  /**
+   * The cat currently showing its preferences.
+   *
+   * Both ids are needed and they are not the same thing: several cats in the
+   * room can be the same roster cat, so `id` says which one on the floor to
+   * follow with the card while `catId` says whose entry to draw in it.
+   */
+  const [inspected, setInspected] = useState<{ id: string; catId: string } | null>(null);
+  const inspectedRef = useRef<typeof inspected>(null);
+  inspectedRef.current = inspected;
+  const router = useRouter();
+
+  /**
+   * The card tracks a cat that shuffles up the queue, so the render loop
+   * writes its position directly. Routing it through state would re-render
+   * the canvas host on every frame of that shuffle.
+   */
+  const cardPos = useRef(new Animated.ValueXY({ x: 0, y: 0 })).current;
+  const cardPointerX = useRef(new Animated.Value(0)).current;
+  const cardHRef = useRef(CARD_H_ESTIMATE);
+  const cardFlip = useRef(new Animated.Value(0)).current;
 
   const { state, addCoins, spendPearls, addDrinkServed, recordCatsServed } =
     useCafeState();
@@ -115,6 +151,22 @@ export default function CafeCanvas() {
   // resize doesn't tear down the canvas and restart the spawn schedule.
   const designHeightRef = useRef(designHeight);
   designHeightRef.current = designHeight;
+
+  // The box the inspect card is clamped inside, read the same way.
+  const layoutRef = useRef(layout);
+  layoutRef.current = layout;
+
+  /**
+   * The design-to-screen transform, for everything painted in React over the
+   * canvas — the dragged cup and the inspect card.
+   *
+   * Declared up here rather than beside the cup, because the render loop below
+   * reads it: the React Compiler folds captured values into its memo-cache
+   * comparisons, so a ref declared under a closure that captures it is touched
+   * during render and throws before the effect ever runs.
+   */
+  const scaleRef = useRef({ scale, offsetX });
+  scaleRef.current = { scale, offsetX };
 
   useEffect(() => {
     pearlsRef.current = state.pearls;
@@ -472,6 +524,32 @@ export default function CafeCanvas() {
 
       picture.value = recorder.finishRecordingAsPicture();
 
+      // Keep the inspect card over the head of the cat it describes — including
+      // while it shuffles up the line, which is most of a queued cat's life.
+      // Only a cat leaving drops its card.
+      const watching = inspectedRef.current;
+      if (watching) {
+        const cat = catsRef.current.find((c) => c.id === watching.id);
+        if (!cat || !isInspectable(cat)) {
+          setInspected(null);
+        } else {
+          const view = scaleRef.current;
+          // `cat.y` is the sprite's centre, and the grid is 28x37 — the head is
+          // half a sprite up, not half a width.
+          const catH = cat.size * 1.8 * cat.scale * catAspectRatio(cat.catId);
+          const spot = anchorCard(
+            view.offsetX + cat.x * view.scale,
+            (cat.y - catH / 2) * view.scale,
+            (cat.y + catH / 2) * view.scale,
+            layoutRef.current,
+            cardHRef.current
+          );
+          cardPos.setValue({ x: spot.x, y: spot.y });
+          cardPointerX.setValue(spot.pointerX);
+          cardFlip.setValue(spot.below ? 1 : 0);
+        }
+      }
+
       // Drive the cup's enabled state from the simulation, but only touch React
       // state when it actually flips.
       const front = getFrontGroupInQueue();
@@ -507,12 +585,10 @@ export default function CafeCanvas() {
   const cupHomeRef = useRef(cupHome);
   const canServeRef = useRef(false);
   const serveRef = useRef(serveFrontGroup);
-  const scaleRef = useRef({ scale, offsetX });
 
   cupHomeRef.current = cupHome;
   canServeRef.current = canServe;
   serveRef.current = serveFrontGroup;
-  scaleRef.current = { scale, offsetX };
 
   // A cup that's ready to be picked up bobs; one that isn't sits still.
   useEffect(() => {
@@ -566,8 +642,13 @@ export default function CafeCanvas() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /** How close a tap has to land to a cat, in design units, to inspect it. */
-  const INSPECT_RADIUS = 30;
+  /**
+   * How close a tap has to land to a cat's centre, in design units, to inspect
+   * it. A cat is ~54x71, so this is roughly its own body: generous enough to
+   * hit one in a line without demanding precision. Overlap between neighbours
+   * is harmless — the nearest cat wins.
+   */
+  const INSPECT_RADIUS = 40;
 
   /**
    * Tap the floor: find the nearest stationary cat and show its preferences.
@@ -593,10 +674,8 @@ export default function CafeCanvas() {
     let best: Cat | null = null;
     let bestDist = INSPECT_RADIUS;
 
-    // Only cats standing still are worth inspecting — one mid-walk to a seat
-    // or on its way out is gone again before the sheet could settle on it.
     catsRef.current.forEach((cat) => {
-      if (cat.state !== 'waiting' && cat.state !== 'seated') return;
+      if (!isInspectable(cat)) return;
       const dist = Math.hypot(cat.x - x, cat.y - y);
       if (dist < bestDist) {
         bestDist = dist;
@@ -604,7 +683,12 @@ export default function CafeCanvas() {
       }
     });
 
-    setInspectedCatId(best ? (best as Cat).catId : null);
+    const hit = best as Cat | null;
+    // Tapping the cat that's already showing puts its card away — with no close
+    // button on the card, the cat itself is the toggle.
+    setInspected((prev) =>
+      !hit ? null : prev?.id === hit.id ? null : { id: hit.id, catId: hit.catId }
+    );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -626,7 +710,12 @@ export default function CafeCanvas() {
       // to hand itself to, and drop back onto the counter.
       onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponder: () => true,
-      onPanResponderGrant: () => setDragging(true),
+      // Picking the cup up puts the card away: it sits over the queue, which is
+      // exactly where the drag is headed.
+      onPanResponderGrant: () => {
+        setDragging(true);
+        setInspected(null);
+      },
       onPanResponderMove: (_e, gesture) => {
         pan.setValue({ x: gesture.dx, y: gesture.dy });
         dragTargetRef.current = canServeRef.current
@@ -663,7 +752,7 @@ export default function CafeCanvas() {
     if (width > 0 && height > 0) setLayout({ width, height });
   };
 
-  const inspectedCat = inspectedCatId ? getCat(inspectedCatId) ?? null : null;
+  const inspectedCat = inspected ? getCat(inspected.catId) ?? null : null;
 
   return (
     <View style={styles.container} onLayout={handleLayout}>
@@ -675,8 +764,35 @@ export default function CafeCanvas() {
 
       {/* Tap a waiting or seated cat to see what it likes. Sits beneath the
           cup's PanResponder in the tree, so an overlapping drag still wins —
-          this only ever fires as a plain tap. */}
-      <Pressable style={styles.fill} onPress={handleInspectTap} />
+          this only ever fires as a plain tap.
+
+          Absolutely positioned, never `flex: 1`: as a flex child it is a
+          sibling of the Canvas and the two split the height between them,
+          which crushes the room into the top half and leaves the tap layer
+          covering bare floor below it. */}
+      <Pressable style={StyleSheet.absoluteFill} onPress={handleInspectTap} />
+
+      {/* Above the dismissal layer so it's visible, below the cup so a card
+          over the front of the queue never buries the thing you're dragging. */}
+      {inspectedCat && (
+        <CatInspectCard
+          cat={inspectedCat}
+          recipes={state.recipes ?? []}
+          pos={cardPos}
+          pointerX={cardPointerX}
+          flip={cardFlip}
+          onHeight={(h) => {
+            cardHRef.current = h;
+          }}
+          onOpenAlmanac={() => {
+            // Closed before navigating: the café stays mounted under the
+            // pushed screen, and coming back to a card pinned on a cat that
+            // has since left reads as a glitch.
+            setInspected(null);
+            router.push(`/cats?cat=${inspectedCat.id}`);
+          }}
+        />
+      )}
 
       {/* Serving is a gesture, not a button: pick the cup up off the counter
           and hand it to the cat at the front of the line. */}
@@ -722,15 +838,6 @@ export default function CafeCanvas() {
           </View>
         </View>
       )}
-
-      <CatAlmanacSheet
-        cat={inspectedCat}
-        owned
-        stat={inspectedCatId ? state.catStats?.[inspectedCatId] : null}
-        ownedIds={state.ownedCats}
-        recipes={state.recipes ?? []}
-        onClose={() => setInspectedCatId(null)}
-      />
     </View>
   );
 }

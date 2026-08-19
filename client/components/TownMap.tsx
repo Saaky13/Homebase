@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  GestureResponderEvent, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View,
+  Animated, GestureResponderEvent, Pressable, ScrollView, StyleSheet, Text,
+  useWindowDimensions, View,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 
@@ -15,7 +16,7 @@ import {
 import { createRoamers, stepRoamers, type Roamer } from '../town/roam';
 import { useCafeState } from '../hooks/useCafeState';
 import { getCat, getMiniCatGrid } from '../constants/catSprites';
-import CatAlmanacSheet from './CatAlmanacSheet';
+import CatInspectCard, { CARD_H_ESTIMATE, anchorCard } from './CatInspectCard';
 
 /** Keeps the town lively without turning the paths into a parade. */
 const MAX_ROAMERS = 16;
@@ -47,6 +48,25 @@ const GREENHOUSE_HIT = {
   h: GREENHOUSE.th * TILE,
 };
 
+/**
+ * The box `drawRoamers` paints a cat into, in map pixels.
+ *
+ * Shared by the tap test and the card's anchor so the two can never disagree
+ * about where a cat is — the tap would land on one box and the card point at
+ * another.
+ */
+function roamerBox(r: Roamer): { x: number; y: number; w: number; h: number } | null {
+  const spec = getCat(r.catId);
+  if (!spec) return null;
+
+  // Mini grids are trimmed to their own ink, so the size depends on the pose.
+  const grid = getMiniCatGrid(spec, r.dir);
+  const w = grid[0]?.length ?? 0;
+  const h = grid.length;
+
+  return { x: r.tx * TILE + TILE / 2 - w / 2, y: r.ty * TILE + TILE / 2 - h + 2, w, h };
+}
+
 export default function TownMap({ night }: { night?: boolean }) {
   const canvasRef = useRef<any>(null);
   const router = useRouter();
@@ -71,7 +91,27 @@ export default function TownMap({ night }: { night?: boolean }) {
   // needs to point at whatever `createRoamers` built for the live effect, so
   // a tap always hits where a cat actually is rather than a stale snapshot.
   const roamersRef = useRef<Roamer[]>([]);
+
+  // There is exactly one roamer per owned cat, so the roster id identifies the
+  // cat on the map as well as the entry on the card.
   const [inspectedCatId, setInspectedCatId] = useState<string | null>(null);
+  const inspectedRef = useRef<string | null>(null);
+  inspectedRef.current = inspectedCatId;
+
+  /**
+   * The card follows a cat that is walking across town, so its position is
+   * driven straight from the render loop rather than through props. Feeding
+   * it through state would re-render the whole map sixty times a second.
+   */
+  const cardPos = useRef(new Animated.ValueXY({ x: 0, y: 0 })).current;
+  const cardPointerX = useRef(new Animated.Value(0)).current;
+  const cardHRef = useRef(CARD_H_ESTIMATE);
+  const cardFlip = useRef(new Animated.Value(0)).current;
+
+  // Read by the render loop, which must not re-run on a resize — restarting it
+  // would rebuild every roamer and send the whole cast back to its spawn tile.
+  const scaleRef = useRef(scale);
+  scaleRef.current = scale;
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -128,6 +168,27 @@ export default function TownMap({ night }: { night?: boolean }) {
       ctx.drawImage(base as HTMLCanvasElement, 0, 0);
       drawRoamers(painter, roamers, isNight);
 
+      // Walk the card along with the cat it belongs to. Written straight to
+      // the Animated values so a cat crossing town costs no re-renders.
+      const watching = inspectedRef.current;
+      if (watching) {
+        const r = roamers.find((cat) => cat.catId === watching);
+        const box = r ? roamerBox(r) : null;
+        if (box) {
+          const s = scaleRef.current;
+          const spot = anchorCard(
+            (box.x + box.w / 2) * s,
+            box.y * s,
+            (box.y + box.h) * s,
+            { width: MAP_PX_W * s, height: MAP_PX_H * s },
+            cardHRef.current
+          );
+          cardPos.setValue({ x: spot.x, y: spot.y });
+          cardPointerX.setValue(spot.pointerX);
+          cardFlip.setValue(spot.below ? 1 : 0);
+        }
+      }
+
       raf = requestAnimationFrame(frame);
     };
 
@@ -158,30 +219,23 @@ export default function TownMap({ night }: { night?: boolean }) {
     let bestDist = Infinity;
 
     roamersRef.current.forEach((r) => {
-      const spec = getCat(r.catId);
-      if (!spec) return;
+      // Padded a little so a slightly short tap still lands — a cat is about
+      // twelve pixels tall on a 384-wide map.
+      const box = roamerBox(r);
+      if (!box) return;
+      if (x < box.x - INSPECT_PAD || x > box.x + box.w + INSPECT_PAD) return;
+      if (y < box.y - INSPECT_PAD || y > box.y + box.h + INSPECT_PAD) return;
 
-      // Same box `drawRoamers` paints into, padded a little so a slightly
-      // short tap still lands — cats are small on a 384-wide map.
-      const grid = getMiniCatGrid(spec, r.dir);
-      const w = grid[0]?.length ?? 0;
-      const h = grid.length;
-      const ox = r.tx * TILE + TILE / 2 - w / 2;
-      const oy = r.ty * TILE + TILE / 2 - h + 2;
-      if (x < ox - INSPECT_PAD || x > ox + w + INSPECT_PAD) return;
-      if (y < oy - INSPECT_PAD || y > oy + h + INSPECT_PAD) return;
-
-      const cx = ox + w / 2;
-      const cy = oy + h / 2;
-      const dist = Math.hypot(cx - x, cy - y);
+      const dist = Math.hypot(box.x + box.w / 2 - x, box.y + box.h / 2 - y);
       if (dist < bestDist) {
         bestDist = dist;
         best = r;
       }
     });
 
-    setInspectedCatId(best ? (best as Roamer).catId : null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    const hit = best ? (best as Roamer).catId : null;
+    // Tapping the open cat again closes it, the way tapping away does.
+    setInspectedCatId((prev) => (hit && hit === prev ? null : hit));
   }, [scale]);
 
   const inspectedCat = inspectedCatId ? getCat(inspectedCatId) ?? null : null;
@@ -209,10 +263,6 @@ export default function TownMap({ night }: { night?: boolean }) {
   );
 
   return (
-    // Wrapped in a plain View so the almanac sheet — absolutely positioned,
-    // inset 0 — resolves against the full screen rather than against the
-    // ScrollView's scrollable content box.
-    <View style={styles.root}>
       <ScrollView
         style={styles.scroll}
         contentContainerStyle={[
@@ -312,23 +362,34 @@ export default function TownMap({ night }: { night?: boolean }) {
             'Growth Hub',
             true
           )}
+
+          {/* Last in the box so it sits over the buildings, and inside it so
+              it scrolls with the cat rather than hanging in the viewport. */}
+          {inspectedCat && (
+            <CatInspectCard
+              cat={inspectedCat}
+              recipes={state.recipes ?? []}
+              pos={cardPos}
+              pointerX={cardPointerX}
+              flip={cardFlip}
+              onHeight={(h) => {
+                cardHRef.current = h;
+              }}
+              onOpenAlmanac={() => {
+                // Closed before navigating: the town stays mounted under the
+                // pushed screen, and coming back to a card pinned on a cat
+                // that has since wandered off reads as a glitch.
+                setInspectedCatId(null);
+                router.push(`/cats?cat=${inspectedCat.id}`);
+              }}
+            />
+          )}
         </View>
       </ScrollView>
-
-      <CatAlmanacSheet
-        cat={inspectedCat}
-        owned
-        stat={inspectedCatId ? state.catStats?.[inspectedCatId] : null}
-        ownedIds={state.ownedCats}
-        recipes={state.recipes ?? []}
-        onClose={() => setInspectedCatId(null)}
-      />
-    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1 },
   scroll: { flex: 1 },
   content: { alignItems: 'center', justifyContent: 'center', flexGrow: 1 },
   hit: { position: 'absolute' },

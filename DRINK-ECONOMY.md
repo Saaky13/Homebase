@@ -330,11 +330,11 @@ a mode that silently becomes a different mode is worse than one you pick.
 - **Order tickets**: occasionally a cat arrives demanding one specific drink at a
   premium, ignoring its own preferences. A rush event.
 - ~~Tap-to-inspect on the town map~~ — **built**, landed early alongside the
-  café-floor version. Both reuse the full `CatAlmanacSheet` rather than the
-  compact anchored card `SERVE-INTERACTION.md` §9 specifies — there's no bond
-  level or brewed-recipe preview to show yet, so the smaller card has nothing
-  over the sheet. §9's version is worth building once Phase 1 (the rail) and
-  Phase 4 (bond) exist to fill it.
+  café-floor version. Both open the frosted anchored card of
+  `SERVE-INTERACTION.md` §9 (`components/CatInspectCard.tsx`); the full
+  `CatAlmanacSheet` stays in the Cat Shelter, one press away via the card's
+  `ALMANAC ›` button (`/cats?cat=id`). The card's bond row and brewed-recipe
+  payout arrive with Phase 4 and Phase 1.
 - Achievements for almanac completion, per-rarity bonds, first legendary match.
 
 ---
