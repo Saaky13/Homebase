@@ -43,23 +43,23 @@ export interface PixelMaterial {
 }
 
 /**
- * Rosy paper. The hub is the self-improvement side of the app and gets its own
+ * Matcha paper. The hub is the self-improvement side of the app and gets its own
  * material rather than borrowing the café's wood — the same reasoning that
  * gives the greenhouse magenta grow-lamps, so no two rooms read alike.
  *
- * Unlike the old palette, this one spans a real value range: the bevels are far
- * enough from the face to model light, which is what the flat pastels lacked.
+ * This one spans a real value range: the bevels are far enough from the face
+ * to model light, which is what the flat pastels lacked.
  */
 export const DAY_MATERIAL: PixelMaterial = {
-  bg: '#FBEFF4',
-  face: '#F7DCE7',
-  faceLt: '#FFF1F7',
-  faceDk: '#D9A8C0',
-  sunk: '#EDCCDC',
-  ink: '#61324A',
-  inkDim: '#9A6C82',
-  track: '#E6C2D4',
-  trackEdge: '#C89AB0',
+  bg: '#F3F7E7',
+  face: '#DEEAC5',
+  faceLt: '#F1F8DF',
+  faceDk: '#A5C081',
+  sunk: '#D1E0B1',
+  ink: '#374F26',
+  inkDim: '#708C51',
+  track: '#CEDFAB',
+  trackEdge: '#A3BD7B',
 };
 
 /**
@@ -69,19 +69,19 @@ export const DAY_MATERIAL: PixelMaterial = {
  * the same time-of-day treatment the town and café already run on the shared
  * `isNightAt()` clock, not a user-facing theme switch. The hub is an interior,
  * so it follows the café's logic rather than the town's — it deepens toward
- * lamplit plum instead of dropping to navy, and the ink stays dark-on-light so
- * every screen in here is as readable at 11pm as at noon.
+ * steeped, shade-grown matcha instead of dropping to navy, and the ink stays
+ * dark-on-light so every screen in here is as readable at 11pm as at noon.
  */
 export const NIGHT_MATERIAL: PixelMaterial = {
-  bg: '#E4D2E0',
-  face: '#E7C9DA',
-  faceLt: '#F6E2EE',
-  faceDk: '#B98FAB',
-  sunk: '#D9B8CD',
-  ink: '#4A2540',
-  inkDim: '#825E75',
-  track: '#D2AEC4',
-  trackEdge: '#AD86A0',
+  bg: '#DCE3C3',
+  face: '#D3DEAC',
+  faceLt: '#E7EFC4',
+  faceDk: '#94A968',
+  sunk: '#C6D79C',
+  ink: '#293C1A',
+  inkDim: '#5C7241',
+  track: '#BED393',
+  trackEdge: '#92AA66',
 };
 
 export const materialAt = (date: Date = new Date()): PixelMaterial =>
@@ -123,7 +123,7 @@ export const ACCENT_INKS: Record<AccentKey, string> = {
 /**
  * Mid tones for icon fills.
  *
- * The accents themselves sit about one step from the rose face, so filling an
+ * The accents themselves sit about one step from the matcha face, so filling an
  * icon with its own accent made the fill vanish and left only the outline —
  * the sprout's leaves disappeared entirely. These are each accent pushed a
  * third of the way toward its ink, which is enough separation to read at 12x12

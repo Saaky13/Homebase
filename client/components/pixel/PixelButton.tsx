@@ -9,7 +9,7 @@
  */
 
 import { useState } from 'react';
-import { Pressable, PressableProps, View, ViewStyle } from 'react-native';
+import { Pressable, PressableProps, StyleProp, View, ViewStyle } from 'react-native';
 import { BEVEL, PixelMaterial } from '../../constants/pixelTheme';
 import { PixelPanel } from './PixelPanel';
 
@@ -26,7 +26,7 @@ export interface PixelButtonProps extends Omit<PressableProps, 'style'> {
    */
   style?: ViewStyle;
   /** Padding and inner layout for the panel face. */
-  contentStyle?: ViewStyle;
+  contentStyle?: StyleProp<ViewStyle>;
   /** Signals "nothing left to do here today" without disabling the press. */
   dimmed?: boolean;
   children?: React.ReactNode;

@@ -1,6 +1,7 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
+  Animated,
   Pressable,
   SafeAreaView,
   ScrollView,
@@ -11,7 +12,7 @@ import {
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useFonts } from 'expo-font';
-import { useCafeState } from '../../hooks/useCafeState';
+import { TODO_PEARL_REWARD, useCafeState } from '../../hooks/useCafeState';
 import { getReflectionPromptForDate, SHOP_ITEMS } from '../../constants/cafeData';
 import { getCat } from '../../constants/catSprites';
 import FocusSection from '../../components/FocusSection';
@@ -33,10 +34,12 @@ import {
 } from '../../components/pixel';
 import {
   ACCENTS,
+  ACCENT_INKS,
   BEVEL_THIN,
   PIXEL_FONT,
   PIXEL_FONT_FILE,
   PX,
+  PixelMaterial,
 } from '../../constants/pixelTheme';
 import type { SectionIconKey } from '../../constants/pixelIcons';
 import ACHIEVEMENTS, {
@@ -47,6 +50,165 @@ import ACHIEVEMENTS, {
 } from '../../constants/achievements';
 
 const SHOP_ITEM_IDS = new Set(SHOP_ITEMS.map((item) => item.id));
+
+/** "+1 pearl" / "+3 pearls" — the payout is the point, so it reads as prose. */
+const pearlLabel = (n: number) => `+${n} pearl${n === 1 ? '' : 's'}`;
+
+/**
+ * A tick, drawn rather than typed.
+ *
+ * The pixel face has no checkmark glyph, and the hub's rule is to draw the
+ * mark instead of falling back to the system font mid-line. Each entry is one
+ * 1-cell-wide column as `[top, height]` on a 7x6 grid: a short left arm
+ * descending, a long right arm climbing out of it.
+ */
+const TICK: readonly (readonly [number, number])[] = [
+  [2, 2],
+  [3, 2],
+  [4, 2],
+  [3, 2],
+  [2, 2],
+  [1, 2],
+  [0, 2],
+];
+
+function PixelTick({ color, unit = PX }: { color: string; unit?: number }) {
+  return (
+    <View style={{ flexDirection: 'row', height: unit * 6 }}>
+      {TICK.map(([top, height], i) => (
+        <View key={i} style={{ width: unit, height: unit * 6 }}>
+          <View
+            style={{
+              marginTop: top * unit,
+              height: height * unit,
+              backgroundColor: color,
+            }}
+          />
+        </View>
+      ))}
+    </View>
+  );
+}
+
+/**
+ * One to-do, with its payout spelled out on the row.
+ *
+ * The row used to be a bare square, a label and a full-width Delete button,
+ * and said nothing at all about the pearl it pays — the credit landed silently
+ * in the top bar, which is easy to miss and impossible to attribute. Now the
+ * reward is written before you tap, and the tap floats it up off the row, so
+ * the payout is visible where the action happened instead of only in a total.
+ */
+function TodoRow({
+  todo,
+  material,
+  onToggle,
+  onRemove,
+}: {
+  todo: { id: string; text: string; done: boolean };
+  material: PixelMaterial;
+  onToggle: () => void;
+  onRemove: () => void;
+}) {
+  // The float is always mounted and driven entirely by this value — at rest it
+  // sits at 0, which is fully transparent. Mounting it on a `useState` instead
+  // meant a dropped completion callback left a stray "+1" pinned to the row.
+  const rise = useRef(new Animated.Value(0)).current;
+
+  const handleToggle = () => {
+    // Only the earning direction gets the flourish. Un-checking refunds the
+    // pearl, and celebrating a refund would read as a second payout.
+    if (!todo.done) {
+      rise.setValue(0);
+      Animated.timing(rise, {
+        toValue: 1,
+        duration: 700,
+        // react-native-web has no native animated module, so asking for the
+        // native driver only earns a warning and a JS fallback.
+        useNativeDriver: false,
+      }).start();
+    }
+    onToggle();
+  };
+
+  return (
+    <View style={pixel.todoRow}>
+      <PixelButton
+        material={material}
+        behind={material.face}
+        onPress={handleToggle}
+        contentStyle={[
+          pixel.todoCheck,
+          todo.done && { backgroundColor: ACCENTS.todo },
+        ]}
+      >
+        {todo.done ? <PixelTick color={ACCENT_INKS.todo} /> : null}
+      </PixelButton>
+
+      <Pressable onPress={handleToggle} style={pixel.todoBody}>
+        <PixelText
+          size="small"
+          color={todo.done ? material.inkDim : material.ink}
+          style={todo.done ? pixel.todoTextDone : undefined}
+        >
+          {todo.text}
+        </PixelText>
+      </Pressable>
+
+      <View style={pixel.todoReward}>
+        {todo.done ? (
+          <PixelChip
+            material={material}
+            tint={ACCENTS.todo}
+            color={ACCENT_INKS.todo}
+            label={pearlLabel(TODO_PEARL_REWARD)}
+          />
+        ) : (
+          <PixelText size="small" color={material.inkDim}>
+            {pearlLabel(TODO_PEARL_REWARD)}
+          </PixelText>
+        )}
+
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            pixel.todoFloat,
+            {
+              // Snaps in, holds, then fades out on the way up.
+              opacity: rise.interpolate({
+                inputRange: [0, 0.01, 0.6, 1],
+                outputRange: [0, 1, 1, 0],
+              }),
+              transform: [
+                {
+                  translateY: rise.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [0, -PX * 11],
+                  }),
+                },
+              ],
+            },
+          ]}
+        >
+          <PixelText size="label" color={ACCENT_INKS.todo}>
+            +{TODO_PEARL_REWARD}
+          </PixelText>
+        </Animated.View>
+      </View>
+
+      <PixelButton
+        material={material}
+        behind={material.face}
+        onPress={onRemove}
+        contentStyle={pixel.todoDelete}
+      >
+        <PixelText size="small" color={material.inkDim}>
+          x
+        </PixelText>
+      </PixelButton>
+    </View>
+  );
+}
 
 type HubSection =
   | 'hub'
@@ -815,12 +977,39 @@ export default function HabitsTab() {
     </>
   );
 
-  const renderTodo = () => (
+  const renderTodo = () => {
+    const doneCount = state.todos.filter((todo) => todo.done).length;
+    const total = state.todos.length;
+
+    return (
     <>
       {sectionHead(
         'To-Do List',
         'A soft place for quick tasks that do not need to become full habits.'
       )}
+
+      {total > 0 ? (
+        <PixelPanel material={m} behind={m.bg} style={pixel.card}>
+          <View style={pixel.rowBetween}>
+            <PixelText size="label" color={m.ink}>
+              {doneCount} of {total} done
+            </PixelText>
+            <PixelChip
+              material={m}
+              tint={doneCount > 0 ? ACCENTS.todo : undefined}
+              color={doneCount > 0 ? ACCENT_INKS.todo : m.inkDim}
+              label={pearlLabel(doneCount * TODO_PEARL_REWARD)}
+            />
+          </View>
+
+          <PixelProgress
+            value={total === 0 ? 0 : doneCount / total}
+            material={m}
+            fill={ACCENTS.todo}
+            style={pixel.todoProgress}
+          />
+        </PixelPanel>
+      ) : null}
 
       <PixelPanel material={m} behind={m.bg} style={pixel.card}>
         <View style={pixel.composer}>
@@ -860,42 +1049,26 @@ export default function HabitsTab() {
           </PixelButton>
         </View>
 
-        {state.todos.map((todo) => (
-          <View key={todo.id} style={pixel.todoRow}>
-            <PixelButton
+        {state.todos.length === 0 ? (
+          <PixelText size="small" color={m.inkDim} plain style={pixel.todoEmpty}>
+            Nothing on the list. Add a task above — each one you check off pays{' '}
+            {TODO_PEARL_REWARD} pearl.
+          </PixelText>
+        ) : (
+          state.todos.map((todo) => (
+            <TodoRow
+              key={todo.id}
+              todo={todo}
               material={m}
-              behind={m.face}
-              onPress={() => toggleTodo(todo.id)}
-              contentStyle={pixel.todoCheck}
-            >
-              {todo.done ? (
-                <View style={[pixel.checkFill, { backgroundColor: ACCENTS.todo }]} />
-              ) : null}
-            </PixelButton>
-
-            <PixelText
-              size="small"
-              color={todo.done ? m.inkDim : m.ink}
-              style={[pixel.todoText, todo.done && pixel.todoTextDone]}
-            >
-              {todo.text}
-            </PixelText>
-
-            <PixelButton
-              material={m}
-              behind={m.face}
-              onPress={() => removeTodo(todo.id)}
-              contentStyle={pixel.todoDelete}
-            >
-              <PixelText size="small" color={m.inkDim}>
-                Delete
-              </PixelText>
-            </PixelButton>
-          </View>
-        ))}
+              onToggle={() => toggleTodo(todo.id)}
+              onRemove={() => removeTodo(todo.id)}
+            />
+          ))
+        )}
       </PixelPanel>
     </>
-  );
+    );
+  };
 
   const achievementCheckState = useMemo((): AchievementCheckState => {
     const stats = state.dailyStats;
@@ -1465,27 +1638,53 @@ const pixel = StyleSheet.create({
     justifyContent: 'center',
   },
 
+  todoProgress: {
+    marginTop: PX * 3,
+  },
+  todoEmpty: {
+    paddingVertical: PX * 2,
+  },
   todoRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: PX * 3,
-    marginBottom: PX * 2,
+    marginBottom: PX * 3,
   },
   todoCheck: {
-    width: PX * 10,
-    height: PX * 10,
+    width: PX * 13,
+    height: PX * 13,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  todoText: {
+  // The label is its own press target, so the whole row toggles rather than
+  // only the 22px square — the list is read left to right and tapping the
+  // words is the obvious gesture.
+  todoBody: {
     flex: 1,
+    paddingVertical: PX * 2,
   },
   todoTextDone: {
     textDecorationLine: 'line-through',
   },
+  // Anchors the floating "+1" that rises out of the row on completion.
+  todoReward: {
+    alignItems: 'flex-end',
+    justifyContent: 'center',
+  },
+  // Starts clear of the label rather than on top of it. Anchored at `top: 0` the
+  // "+1" spent its first frames sitting across the "+1 pearl" chip, which read as
+  // a rendering fault; `bottom: '100%'` puts it just above the row so the whole
+  // rise is in clean space.
+  todoFloat: {
+    position: 'absolute',
+    right: 0,
+    bottom: '100%',
+  },
   todoDelete: {
-    paddingHorizontal: PX * 3,
-    paddingVertical: PX * 2,
+    paddingHorizontal: PX * 4,
+    paddingVertical: PX * 3,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 
   filterScroll: {
