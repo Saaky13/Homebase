@@ -253,6 +253,12 @@ export const DEFAULT_FOCUS_MINUTES = 25;
 const SECONDS_PER_BOBA = 60;
 const SECONDS_PER_PEARL = 300;
 
+// Flat per-item reward for checking off a to-do — the list has no tier, so
+// unlike habits it pays the same regardless of what got done. Exported so the
+// To-Do section can print the payout instead of hardcoding a number that would
+// drift the moment this one changed.
+export const TODO_PEARL_REWARD = 1;
+
 const idleFocusTimer = (minutes = DEFAULT_FOCUS_MINUTES): FocusTimer => ({
   durationSeconds: minutes * 60,
   remainingSeconds: minutes * 60,
@@ -1466,14 +1472,36 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
     [commit]
   );
 
+  // Pays TODO_PEARL_REWARD on the transition to done and refunds it on the
+  // transition back, so toggling twice always nets zero — same shape as
+  // logHabitRep/unlogHabitRep, just without a tier to look up.
   const toggleTodo = useCallback(
     (todoId: string) => {
-      commit((prev) => ({
-        ...prev,
-        todos: prev.todos.map((todo) =>
-          todo.id === todoId ? { ...todo, done: !todo.done } : todo
-        ),
-      }));
+      const todayKey = getTodayDateKey();
+
+      commit((prev) => {
+        const todo = prev.todos.find((entry) => entry.id === todoId);
+        if (!todo) return prev;
+
+        const nowDone = !todo.done;
+        const delta = nowDone ? TODO_PEARL_REWARD : -TODO_PEARL_REWARD;
+        const withDay = ensureDailyStat(prev.dailyStats, todayKey);
+
+        return {
+          ...prev,
+          pearls: Math.max(0, prev.pearls + delta),
+          todos: prev.todos.map((entry) =>
+            entry.id === todoId ? { ...entry, done: nowDone } : entry
+          ),
+          dailyStats: {
+            ...withDay,
+            [todayKey]: {
+              ...withDay[todayKey],
+              pearlsEarned: Math.max(0, withDay[todayKey].pearlsEarned + delta),
+            },
+          },
+        };
+      });
     },
     [commit]
   );
