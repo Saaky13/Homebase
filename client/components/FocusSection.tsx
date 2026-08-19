@@ -1,8 +1,14 @@
 import React, { useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Alert, Vibration } from 'react-native';
+import { View, StyleSheet, Vibration } from 'react-native';
 import { useCafeState } from '../hooks/useCafeState';
-import { CATS_DATA } from '../constants/cafeData';
-import { colors } from '../constants/colors';
+import {
+  PixelButton,
+  PixelPanel,
+  PixelProgress,
+  PixelText,
+  usePixelMaterial,
+} from './pixel';
+import { ACCENTS, PX } from '../constants/pixelTheme';
 
 /**
  * The focus timer, rendered as a Growth Hub section rather than its own tab.
@@ -11,13 +17,17 @@ import { colors } from '../constants/colors';
  * drives the tick. That split is what lets a running session survive leaving
  * the section, which a hub section otherwise couldn't do because navigating
  * away unmounts it.
+ *
+ * Drawn with the hub's pixel kit, on the hub's rose material. It used to run
+ * the old soft-card styles — brown wraps, 20px radii, its own local pixel
+ * button — which made the one section you sit and stare at the only one that
+ * didn't look like the hub it lives in.
  */
 export default function FocusSection() {
   const {
     state,
     addPearl,
     addCoins,
-    addCatToQueue,
     resetCafe,
     setGuideContext,
     setFocusDuration,
@@ -27,10 +37,16 @@ export default function FocusSection() {
     settleFocusTimer,
   } = useCafeState();
 
+  const m = usePixelMaterial();
+  const accent = ACCENTS.focus;
+
   const timer = state.focusTimer;
   const minutes = Math.floor(timer.remainingSeconds / 60);
   const seconds = timer.remainingSeconds % 60;
   const isFresh = timer.remainingSeconds === timer.durationSeconds;
+  const elapsed = timer.durationSeconds
+    ? 1 - timer.remainingSeconds / timer.durationSeconds
+    : 0;
 
   useEffect(() => {
     if (!timer.isRunning) return;
@@ -41,351 +57,317 @@ export default function FocusSection() {
 
       Vibration.vibrate([0, 100, 50, 100]);
 
-      const randomCat = CATS_DATA[Math.floor(Math.random() * CATS_DATA.length)];
-      addCatToQueue({
-        name: randomCat.name,
-        emoji: randomCat.emoji,
-        type: randomCat.type,
-      });
-
-      setGuideContext('focus:goodBreak');
-      Alert.alert('Session Complete!', `${randomCat.name} wandered into your café.`);
+      // Finishing a session used to fire `Alert.alert` and push a cat onto the
+      // legacy `state.queue` — a field the café canvas stopped reading long
+      // ago, and an Alert that react-native-web never renders. So on the one
+      // platform this app actually runs on, finishing a focus block produced
+      // no feedback at all. The guide says it instead.
+      setGuideContext('focus:complete');
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [timer.isRunning, settleFocusTimer, addCatToQueue, setGuideContext]);
+  }, [timer.isRunning, settleFocusTimer, setGuideContext]);
 
+  // The three handlers below used to write `focus:start`, `focus:shortSession`
+  // and `focus:longSession` into guideContext. No beat has ever matched those
+  // strings, and setting one wiped `habits:focus`, which is the context the
+  // Focus section's own orientation beat keys off — so pressing Start quietly
+  // disabled the guide for that whole section.
   const handleStart = () => {
-    setGuideContext('focus:start');
     startFocusTimer();
   };
 
   const handlePause = () => {
-    setGuideContext('focus:breaks');
     pauseFocusTimer();
   };
 
   const handlePresetPress = (value: number) => {
     setFocusDuration(value);
-    setGuideContext(value <= 15 ? 'focus:shortSession' : 'focus:longSession');
   };
 
   return (
     <>
-      <View style={[styles.cardWrap, styles.heroWrap]}>
-        <View style={styles.card}>
-          <Text style={styles.label}>Focus Session</Text>
+      <PixelPanel material={m} behind={m.bg} style={pixel.card}>
+        <PixelText size="small" color={m.inkDim}>
+          FOCUS SESSION
+        </PixelText>
 
-          <Text style={styles.timerDisplay}>
-            {String(minutes).padStart(2, '0')}:{String(seconds).padStart(2, '0')}
-          </Text>
+        <PixelText size={48} color={m.ink} style={pixel.clock}>
+          {String(minutes).padStart(2, '0')}:{String(seconds).padStart(2, '0')}
+        </PixelText>
 
-          <Text style={styles.status}>
-            {timer.isRunning
-              ? 'Brewing in progress...'
-              : isFresh
-              ? 'Ready to focus'
-              : 'Paused'}
-          </Text>
+        <PixelProgress
+          value={elapsed}
+          material={m}
+          fill={accent}
+          style={pixel.clockBar}
+        />
 
-          <PixelButton
-            title={timer.isRunning ? 'Running...' : 'Start Focus'}
-            onPress={handleStart}
-            disabled={timer.isRunning}
-          />
+        <PixelText size="body" color={m.inkDim} style={pixel.status}>
+          {timer.isRunning ? 'Brewing in progress...' : isFresh ? 'Ready to focus' : 'Paused'}
+        </PixelText>
 
-          <PixelButton
-            title="Pause / Break"
-            onPress={handlePause}
-            disabled={!timer.isRunning}
-            variant="sky"
-          />
-
-          <PixelButton title="Reset Timer" onPress={resetFocusTimer} variant="pink" />
-
-          <Text style={styles.hint}>5 min = 1 pearl • 1 min = 1 boba</Text>
-        </View>
-      </View>
-
-      <View style={styles.cardWrap}>
-        <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Quick Start</Text>
-
-          <View style={styles.presetGrid}>
-            {[5, 15, 25, 45].map((value) => (
-              <TouchableOpacity
-                key={value}
-                style={styles.presetButton}
-                onPress={() => handlePresetPress(value)}
-                activeOpacity={0.85}
-              >
-                <Text style={styles.presetText}>{value} min</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-
-          <Text style={styles.smallNote}>
-            Pick a block that feels realistic. The goal is rhythm, not suffering.
-          </Text>
-        </View>
-      </View>
-
-      <View style={[styles.cardWrap, styles.breakWrap]}>
-        <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Break Rhythm</Text>
-
-          <Text style={styles.desc}>
-            Focus works best when your brain gets little recovery windows. Breaks are not
-            quitting. Breaks are part of the work cycle.
-          </Text>
-
-          <PixelButton
-            title="Why Breaks Matter"
-            onPress={() => setGuideContext('focus:breaks')}
-            variant="sky"
-          />
-
-          <PixelButton
-            title="How to Take a Good Break"
-            onPress={() => setGuideContext('focus:goodBreak')}
-            variant="pink"
-          />
-
-          <View style={styles.breakNoteBox}>
-            <Text style={styles.breakNoteTitle}>Friendly break note</Text>
-            <Text style={styles.breakNoteText}>
-              Try not to spend your break giving your attention to another intense thing.
-              Let your brain breathe, stretch, drink water, and process what you just learned.
-            </Text>
-          </View>
-        </View>
-      </View>
-
-      <View style={styles.cardWrap}>
-        <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Focus Notes</Text>
-          <Text style={styles.tip}>• Start small and protect your momentum</Text>
-          <Text style={styles.tip}>• Each minute brews progress into your café</Text>
-          <Text style={styles.tip}>• Breaks should restore attention, not spend it somewhere else</Text>
-          <Text style={styles.tip}>• Breathe, stretch, hydrate, and let your brain process</Text>
-          <Text style={styles.tip}>• Consistency matters more than intensity</Text>
-        </View>
-      </View>
-
-      <View style={styles.debugRow}>
-        <TouchableOpacity style={styles.debugButton} onPress={() => addPearl(50)}>
-          <Text style={styles.debugButtonText}>+50 Pearls</Text>
-        </TouchableOpacity>
-
-        {/* Dev-only, same as the pearls button beside it: the shelter's prices
-            climb into the hundreds, and earning that by serving cats is too
-            slow to test an adoption against. */}
-        <TouchableOpacity
-          style={[styles.debugButton, styles.coinsButton]}
-          onPress={() => addCoins(50)}
+        <PixelButton
+          material={m}
+          behind={m.face}
+          accent={accent}
+          dimmed={timer.isRunning}
+          disabled={timer.isRunning}
+          onPress={handleStart}
+          style={pixel.action}
+          contentStyle={pixel.actionFace}
         >
-          <Text style={styles.debugButtonText}>+50 Coins</Text>
-        </TouchableOpacity>
+          <PixelText size="label" color={m.ink}>
+            {timer.isRunning ? 'Running...' : 'Start Focus'}
+          </PixelText>
+        </PixelButton>
 
-        <TouchableOpacity style={[styles.debugButton, styles.resetButton]} onPress={resetCafe}>
-          <Text style={styles.debugButtonText}>Fresh Start</Text>
-        </TouchableOpacity>
-      </View>
+        <View style={pixel.actionRow}>
+          <PixelButton
+            material={m}
+            behind={m.face}
+            accent={ACCENTS.mission}
+            dimmed={!timer.isRunning}
+            disabled={!timer.isRunning}
+            onPress={handlePause}
+            style={pixel.actionHalf}
+            contentStyle={pixel.actionFace}
+          >
+            <PixelText size="small" color={m.ink}>
+              Pause / Break
+            </PixelText>
+          </PixelButton>
+
+          <PixelButton
+            material={m}
+            behind={m.face}
+            accent={ACCENTS.habits}
+            onPress={resetFocusTimer}
+            style={pixel.actionHalf}
+            contentStyle={pixel.actionFace}
+          >
+            <PixelText size="small" color={m.ink}>
+              Reset Timer
+            </PixelText>
+          </PixelButton>
+        </View>
+
+        <PixelText size="small" color={m.inkDim} style={pixel.hint}>
+          5 min = 1 pearl · 1 min = 1 boba
+        </PixelText>
+      </PixelPanel>
+
+      <PixelPanel material={m} behind={m.bg} style={pixel.card}>
+        <PixelText size="title" color={m.ink}>
+          Quick Start
+        </PixelText>
+
+        <View style={pixel.presetGrid}>
+          {[5, 15, 25, 45].map((value) => (
+            <PixelButton
+              key={value}
+              material={m}
+              behind={m.face}
+              accent={timer.durationSeconds === value * 60 ? accent : undefined}
+              onPress={() => handlePresetPress(value)}
+              style={pixel.preset}
+              contentStyle={pixel.presetFace}
+            >
+              <PixelText size="small" color={m.ink}>
+                {value} min
+              </PixelText>
+            </PixelButton>
+          ))}
+        </View>
+
+        <PixelText size="small" color={m.inkDim} plain style={pixel.body}>
+          Pick a block that feels realistic. The goal is rhythm, not suffering.
+        </PixelText>
+      </PixelPanel>
+
+      <PixelPanel material={m} behind={m.bg} style={pixel.card}>
+        <PixelText size="title" color={m.ink}>
+          Break Rhythm
+        </PixelText>
+
+        <PixelText size="small" color={m.inkDim} plain style={pixel.body}>
+          Focus works best when your brain gets little recovery windows. Breaks are not
+          quitting. Breaks are part of the work cycle.
+        </PixelText>
+
+        <PixelButton
+          material={m}
+          behind={m.face}
+          accent={ACCENTS.mission}
+          onPress={() => setGuideContext('focus:breaks')}
+          style={pixel.action}
+          contentStyle={pixel.actionFace}
+        >
+          <PixelText size="small" color={m.ink}>
+            Why Breaks Matter
+          </PixelText>
+        </PixelButton>
+
+        <PixelButton
+          material={m}
+          behind={m.face}
+          accent={ACCENTS.habits}
+          onPress={() => setGuideContext('focus:goodBreak')}
+          style={pixel.action}
+          contentStyle={pixel.actionFace}
+        >
+          <PixelText size="small" color={m.ink}>
+            How to Take a Good Break
+          </PixelText>
+        </PixelButton>
+
+        <PixelPanel material={m} inset behind={m.face} style={pixel.note}>
+          <PixelText size="label" color={m.ink}>
+            Friendly break note
+          </PixelText>
+          <PixelText size="small" color={m.inkDim} plain style={pixel.body}>
+            Try not to spend your break giving your attention to another intense thing.
+            Let your brain breathe, stretch, drink water, and process what you just learned.
+          </PixelText>
+        </PixelPanel>
+      </PixelPanel>
+
+      <PixelPanel material={m} behind={m.bg} style={pixel.card}>
+        <PixelText size="title" color={m.ink}>
+          Focus Notes
+        </PixelText>
+        {[
+          'Start small and protect your momentum',
+          'Each minute brews progress into your café',
+          'Breaks should restore attention, not spend it somewhere else',
+          'Breathe, stretch, hydrate, and let your brain process',
+          'Consistency matters more than intensity',
+        ].map((tip) => (
+          <View key={tip} style={pixel.tipRow}>
+            <View style={[pixel.bullet, { backgroundColor: accent }]} />
+            <PixelText size="small" color={m.inkDim} plain style={pixel.tipText}>
+              {tip}
+            </PixelText>
+          </View>
+        ))}
+      </PixelPanel>
+
+      {/* Dev-only. The shelter's prices climb into the hundreds and the
+          greenhouse's seeds on top of that; earning it by serving cats is far
+          too slow to test an adoption or a full bench against. */}
+      <PixelPanel material={m} behind={m.bg} style={pixel.card}>
+        <PixelText size="small" color={m.inkDim}>
+          DEV
+        </PixelText>
+        <View style={pixel.debugRow}>
+          {[
+            { label: '+50 Pearls', accent: ACCENTS.calendar, onPress: () => addPearl(50) },
+            { label: '+50 Coins', accent: ACCENTS.achievements, onPress: () => addCoins(50) },
+            { label: '+5000 Coins', accent: ACCENTS.achievements, onPress: () => addCoins(5000) },
+            { label: 'Fresh Start', accent: ACCENTS.todo, onPress: resetCafe },
+          ].map((b) => (
+            <PixelButton
+              key={b.label}
+              material={m}
+              behind={m.face}
+              accent={b.accent}
+              onPress={b.onPress}
+              style={pixel.debugButton}
+              contentStyle={pixel.actionFace}
+            >
+              <PixelText size="small" color={m.ink}>
+                {b.label}
+              </PixelText>
+            </PixelButton>
+          ))}
+        </View>
+      </PixelPanel>
     </>
   );
 }
 
-function PixelButton({
-  title,
-  onPress,
-  disabled,
-  variant = 'gold',
-}: {
-  title: string;
-  onPress: () => void;
-  disabled?: boolean;
-  variant?: 'gold' | 'sky' | 'pink';
-}) {
-  const palette = {
-    gold: { outer: '#C58F2D', inner: '#E7B85C' },
-    sky: { outer: '#679CBC', inner: '#A9D7F3' },
-    pink: { outer: '#B86883', inner: '#EAA4B4' },
-  }[variant];
-
-  return (
-    <TouchableOpacity
-      activeOpacity={0.9}
-      disabled={disabled}
-      onPress={onPress}
-      style={[styles.pixelWrap, disabled && { opacity: 0.45 }]}
-    >
-      <View style={[styles.pixelOuter, { backgroundColor: palette.outer }]}>
-        <View style={[styles.pixelInner, { backgroundColor: palette.inner }]}>
-          <Text style={styles.pixelText}>{title}</Text>
-        </View>
-      </View>
-    </TouchableOpacity>
-  );
-}
-
-const styles = StyleSheet.create({
-  cardWrap: {
-    backgroundColor: '#B97A43',
-    borderRadius: 20,
-    paddingBottom: 5,
-    marginBottom: 14,
-  },
-  heroWrap: {
-    backgroundColor: '#9D5470',
-  },
-  breakWrap: {
-    backgroundColor: '#679CBC',
-  },
+/** Layout only — every colour is passed at render time, because it changes at dusk. */
+const pixel = StyleSheet.create({
   card: {
-    backgroundColor: colors.white,
-    borderRadius: 18,
-    borderWidth: 2,
-    borderColor: colors.brown300,
-    padding: 16,
+    padding: PX * 5,
+    marginBottom: PX * 5,
   },
-  label: {
-    fontSize: 12,
-    color: colors.brown700,
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-    fontWeight: '800',
-    marginBottom: 10,
+  clock: {
     textAlign: 'center',
+    marginTop: PX * 2,
   },
-  timerDisplay: {
-    fontSize: 54,
-    fontWeight: '900',
-    color: colors.brown900,
-    textAlign: 'center',
-    marginVertical: 14,
+  clockBar: {
+    marginBottom: PX * 3,
   },
   status: {
-    fontSize: 14,
-    color: colors.brown700,
     textAlign: 'center',
-    marginBottom: 14,
-    fontWeight: '700',
+    marginBottom: PX * 4,
   },
-  pixelWrap: {
-    marginBottom: 10,
+  action: {
+    marginBottom: PX * 3,
   },
-  pixelOuter: {
-    borderRadius: 14,
-    paddingBottom: 4,
-  },
-  pixelInner: {
-    borderRadius: 12,
-    paddingVertical: 12,
+  actionFace: {
+    paddingVertical: PX * 4,
     alignItems: 'center',
   },
-  pixelText: {
-    fontSize: 13,
-    fontWeight: '900',
-    color: colors.brown900,
+  actionRow: {
+    flexDirection: 'row',
+    gap: PX * 3,
+  },
+  actionHalf: {
+    flex: 1,
+    marginBottom: PX * 3,
   },
   hint: {
-    fontSize: 12,
-    color: colors.brown700,
-    marginTop: 8,
     textAlign: 'center',
-    fontWeight: '700',
-  },
-  sectionTitle: {
-    fontSize: 17,
-    fontWeight: '900',
-    color: colors.brown900,
-    marginBottom: 10,
-  },
-  desc: {
-    fontSize: 13,
-    color: colors.brown700,
-    marginBottom: 12,
-    lineHeight: 18,
-    fontWeight: '700',
-  },
-  smallNote: {
-    fontSize: 12,
-    color: colors.brown700,
-    marginTop: 10,
-    lineHeight: 16,
-    fontWeight: '700',
+    marginTop: PX,
   },
   presetGrid: {
     flexDirection: 'row',
-    gap: 8,
-    justifyContent: 'space-between',
+    gap: PX * 3,
+    marginTop: PX * 3,
   },
-  presetButton: {
+  preset: {
     flex: 1,
-    backgroundColor: '#F7D9A7',
-    borderColor: '#C58F2D',
-    borderWidth: 2,
-    borderRadius: 12,
-    paddingVertical: 10,
+  },
+  presetFace: {
+    paddingVertical: PX * 3,
     alignItems: 'center',
   },
-  presetText: {
-    fontSize: 12,
-    fontWeight: '900',
-    color: colors.brown900,
+  body: {
+    marginTop: PX * 2,
+    marginBottom: PX * 3,
+    lineHeight: 18,
   },
-  breakNoteBox: {
-    backgroundColor: '#FFF2C8',
-    borderColor: '#C58F2D',
-    borderWidth: 2,
-    borderRadius: 16,
-    padding: 12,
-    marginTop: 4,
+  note: {
+    padding: PX * 4,
+    marginTop: PX,
   },
-  breakNoteTitle: {
-    fontSize: 13,
-    fontWeight: '900',
-    color: colors.brown900,
-    marginBottom: 6,
+  tipRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginTop: PX * 3,
   },
-  breakNoteText: {
-    fontSize: 12,
-    color: colors.brown700,
-    lineHeight: 17,
-    fontWeight: '700',
+  // A square bullet: the pixel kit has no round marks, and "•" falls out of the
+  // pixel face to the system font mid-line.
+  bullet: {
+    width: PX * 2,
+    height: PX * 2,
+    marginTop: PX * 3,
+    marginRight: PX * 3,
   },
-  tip: {
-    fontSize: 12,
-    color: colors.brown700,
-    marginBottom: 6,
-    lineHeight: 16,
-    fontWeight: '700',
+  tipText: {
+    flex: 1,
+    lineHeight: 18,
   },
   debugRow: {
     flexDirection: 'row',
-    gap: 10,
-    marginTop: 4,
-  },
-  coinsButton: {
-    backgroundColor: colors.gold,
-    borderColor: '#B98B2E',
+    flexWrap: 'wrap',
+    gap: PX * 3,
+    marginTop: PX * 3,
   },
   debugButton: {
-    flex: 1,
-    backgroundColor: colors.lavender,
-    borderRadius: 14,
-    paddingVertical: 12,
-    alignItems: 'center',
-    borderWidth: 2,
-    borderColor: '#8B73CC',
-  },
-  resetButton: {
-    backgroundColor: colors.coral,
-    borderColor: '#B85A4D',
-  },
-  debugButtonText: {
-    color: colors.brown900,
-    fontWeight: '900',
-    fontSize: 12,
+    // Two across, so "+5000 Coins" fits without the pixel face wrapping.
+    width: '48%',
   },
 });

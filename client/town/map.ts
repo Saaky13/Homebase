@@ -49,55 +49,87 @@ export interface BuildingSpec {
   route?: string;
 }
 
-/** Where the fountain sits, in tiles. The Growth Hub entry point. */
-export const FOUNTAIN = { tx: 16, ty: 15 } as const;
 /**
- * The greenhouse. Moved up beside the café/market/shelter cluster from the
- * southern fields once it became somewhere you visit *every day* — the same
- * reasoning that put the shelter here rather than on an empty plot. Its east
- * edge fronts onto the street running south from y=44.
+ * Where the fountain sits, in tiles. The Growth Hub entry point, and the
+ * single most-opened door in the app — which is why it sits in the bottom-left
+ * corner. A phone is held low and gripped at the bottom; the top of a 92-tile
+ * map is the hardest part of the screen to reach, and that is exactly where
+ * the civic buildings used to be.
  */
-export const GREENHOUSE = { tx: 4, ty: 43, tw: 9, th: 6 } as const;
+export const FOUNTAIN = { tx: 16, ty: 68 } as const;
 
+/**
+ * The fountain's basin, in pixels either side of its centre. The plaza is the
+ * single biggest thing in town by some margin — bigger than the café — because
+ * it is the Growth Hub's front door and the Growth Hub is the app. A landmark
+ * you steer by beats a building you have to find.
+ *
+ * Held in pixels rather than tiles because everything in `drawFountain` is
+ * measured off the centre, and `FOUNTAIN_TILES` derives the footprint back out
+ * for the walk graph.
+ */
+export const FOUNTAIN_R = { x: 48, up: 26, down: 30 } as const;
+
+/** The basin's tile footprint — cats route around it rather than through it. */
+export const FOUNTAIN_TILES = {
+  tx: Math.floor((FOUNTAIN.tx * TILE - FOUNTAIN_R.x) / TILE),
+  ty: Math.floor((FOUNTAIN.ty * TILE - FOUNTAIN_R.up) / TILE),
+  tw: Math.ceil((FOUNTAIN_R.x * 2) / TILE),
+  th: Math.ceil((FOUNTAIN_R.up + FOUNTAIN_R.down) / TILE),
+} as const;
+
+
+/**
+ * The greenhouse. It wants a daily visit, so it stays in the same southern
+ * band as the fountain — across the square from it, fronting the street that
+ * runs down the east side.
+ */
+export const GREENHOUSE = { tx: 28, ty: 68, tw: 9, th: 6 } as const;
+
+/**
+ * The town, ordered north to south — which is also roughly cheapest to
+ * dearest in attention. Everything with a `route` lives in the bottom third,
+ * inside a thumb's sweep; the north is outskirts you look at rather than
+ * places you go.
+ */
 export const BUILDINGS: BuildingSpec[] = [
-  { id: 'library', tx: 6, ty: 9, tw: 6, th: 5, color: 'b', roof: 'peak', win: 'arch', door: 'arch', sign: true, chimney: true, label: 'Library', route: '/habits' },
-  { id: 'mission', tx: 21, ty: 8, tw: 5, th: 5, color: 'e', roof: 'mansard', win: 'big', door: 'mid', sign: true, label: 'Mission Hall', route: '/habits' },
-  { id: 'house-1', tx: 22, ty: 16, tw: 4, th: 4, color: 'c', roof: 'hip', win: 'big', door: 'mid' },
-  { id: 'archive', tx: 6, ty: 17, tw: 5, th: 4, color: 'h', roof: 'gable', win: 'big', door: 'mid', label: 'Archive', route: '/habits' },
-  { id: 'house-2', tx: 12, ty: 20, tw: 4, th: 4, color: 'f', roof: 'hip', win: 'round', door: 'mid' },
-  { id: 'house-3', tx: 17, ty: 3, tw: 4, th: 4, color: 'a', roof: 'gable', win: 'big', door: 'mid', chimney: true },
+  // Outskirts. None of these are interactive; they're the town's character.
+  // The five anonymous cottages that used to fill this band are gone — they
+  // were doors that don't open, and deleting them bought every building that
+  // stayed a tile or two in each direction and let the whole town pull tighter.
+  { id: 'inn', tx: 22, ty: 12, tw: 6, th: 6, color: 'h', roof: 'mansard', win: 'big', door: 'mid', chimney: true, label: 'Inn' },
+  { id: 'shrine', tx: 13, ty: 19, tw: 6, th: 5, color: 'h', roof: 'gable', win: 'big', door: 'mid', sign: true, label: 'Shrine' },
+  { id: 'grocer', tx: 24, ty: 21, tw: 6, th: 6, color: 'a', roof: 'gable', win: 'lg', door: 'std', sign: true, awning: true, label: 'Grocer' },
 
-  { id: 'cafe', tx: 4, ty: 27, tw: 5, th: 5, color: 'a', roof: 'gable', win: 'lg', door: 'std', sign: true, awning: true, label: 'Café', route: '/cafe' },
-  { id: 'house-4', tx: 11, ty: 25, tw: 4, th: 4, color: 'c', roof: 'peak', win: 'big', door: 'mid' },
-  { id: 'market', tx: 17, ty: 28, tw: 5, th: 4, color: 'b', roof: 'flat', win: 'lg', door: 'std', awning: true, label: 'Market', route: '/shop' },
-  // Sited with the café and market rather than on one of the southern empty
-  // plots — the shelter is somewhere you visit often, and those plots are a
-  // long scroll from everything else.
-  { id: 'shelter', tx: 17, ty: 34, tw: 5, th: 4, color: 'd', roof: 'gable', win: 'arch', door: 'arch', sign: true, awning: true, label: 'Cat Shelter', route: '/cats' },
-  { id: 'inn', tx: 27, ty: 23, tw: 5, th: 5, color: 'h', roof: 'mansard', win: 'big', door: 'mid', chimney: true, label: 'Inn' },
-  { id: 'house-5', tx: 33, ty: 20, tw: 4, th: 4, color: 'b', roof: 'hip', win: 'big', door: 'mid' },
-  { id: 'observatory', tx: 39, ty: 25, tw: 4, th: 5, color: 'f', roof: 'peak', win: 'arch', door: 'mid', label: 'Observatory' },
-  { id: 'house-6', tx: 28, ty: 32, tw: 4, th: 4, color: 'a', roof: 'gable', win: 'big', door: 'mid' },
-  { id: 'bakery', tx: 34, ty: 31, tw: 5, th: 4, color: 'g', roof: 'hip', win: 'big', door: 'mid', sign: true, label: 'Bakery' },
-  { id: 'house-7', tx: 5, ty: 35, tw: 5, th: 5, color: 'b', roof: 'mansard', win: 'big', door: 'mid', chimney: true },
-  { id: 'house-8', tx: 12, ty: 37, tw: 4, th: 4, color: 'h', roof: 'gable', win: 'round', door: 'mid' },
+  // The middle stretch — still scenery, but close enough to the town proper
+  // that it reads as approach rather than countryside.
+  { id: 'workshop', tx: 21, ty: 31, tw: 6, th: 5, color: 'h', roof: 'flat', win: 'lg', door: 'wide', label: 'Workshop' },
+  { id: 'bakery', tx: 12, ty: 33, tw: 6, th: 5, color: 'g', roof: 'hip', win: 'big', door: 'mid', sign: true, label: 'Bakery' },
+  { id: 'observatory', tx: 31, ty: 33, tw: 5, th: 6, color: 'f', roof: 'peak', win: 'arch', door: 'mid', label: 'Observatory' },
+  { id: 'nursery', tx: 19, ty: 39, tw: 6, th: 5, color: 'f', roof: 'gable', win: 'big', door: 'mid', sign: true, label: 'Nursery' },
 
-  { id: 'grocer', tx: 16, ty: 52, tw: 5, th: 5, color: 'a', roof: 'gable', win: 'lg', door: 'std', sign: true, awning: true, label: 'Grocer' },
-  { id: 'house-9', tx: 30, ty: 49, tw: 5, th: 5, color: 'c', roof: 'hip', win: 'big', door: 'mid', awning: true },
-  { id: 'house-10', tx: 36, ty: 51, tw: 4, th: 4, color: 'b', roof: 'gable', win: 'big', door: 'mid' },
-  { id: 'workshop', tx: 29, ty: 57, tw: 5, th: 4, color: 'h', roof: 'flat', win: 'lg', door: 'wide', label: 'Workshop' },
-  { id: 'house-11', tx: 8, ty: 61, tw: 4, th: 4, color: 'e', roof: 'peak', win: 'big', door: 'mid' },
-  { id: 'nursery', tx: 16, ty: 62, tw: 5, th: 4, color: 'f', roof: 'gable', win: 'big', door: 'mid', sign: true, label: 'Nursery' },
-  { id: 'house-12', tx: 33, ty: 66, tw: 5, th: 5, color: 'a', roof: 'mansard', win: 'big', door: 'mid', chimney: true },
-  { id: 'house-13', tx: 10, ty: 73, tw: 5, th: 5, color: 'b', roof: 'gable', win: 'big', door: 'std', awning: true },
-  { id: 'house-14', tx: 18, ty: 76, tw: 4, th: 4, color: 'c', roof: 'hip', win: 'round', door: 'mid' },
-  { id: 'shrine', tx: 30, ty: 73, tw: 5, th: 4, color: 'h', roof: 'gable', win: 'big', door: 'mid', sign: true, label: 'Shrine' },
-  { id: 'house-15', tx: 24, ty: 80, tw: 4, th: 4, color: 'g', roof: 'peak', win: 'big', door: 'mid' },
+  // The town proper. Every route in the app is below this line, and the two
+  // you open most — the Growth Hub's fountain and the café — are the lowest.
+  { id: 'market', tx: 30, ty: 45, tw: 6, th: 5, color: 'b', roof: 'flat', win: 'lg', door: 'std', awning: true, label: 'Market', route: '/shop' },
+  // Second only to the café. Thirty-six cats live here; a four-tile cottage
+  // read like somewhere you'd keep two.
+  { id: 'shelter', tx: 16, ty: 45, tw: 8, th: 6, color: 'd', roof: 'gable', win: 'arch', door: 'arch', sign: true, awning: true, label: 'Cat Shelter', route: '/cats' },
+  { id: 'library', tx: 4, ty: 52, tw: 7, th: 6, color: 'b', roof: 'peak', win: 'arch', door: 'arch', sign: true, chimney: true, label: 'Library', route: '/habits' },
+  // The biggest building in town, and the only one that earns it — the café is
+  // where the whole economy cashes out.
+  { id: 'cafe', tx: 27, ty: 52, tw: 9, th: 8, color: 'a', roof: 'gable', win: 'lg', door: 'std', sign: true, awning: true, label: 'Café', route: '/cafe' },
+  { id: 'mission', tx: 13, ty: 51, tw: 6, th: 6, color: 'e', roof: 'mansard', win: 'big', door: 'mid', sign: true, label: 'Mission Hall', route: '/habits' },
+  { id: 'archive', tx: 25, ty: 61, tw: 6, th: 5, color: 'h', roof: 'gable', win: 'big', door: 'mid', label: 'Archive', route: '/habits' },
 ];
 
-/** Land you own but haven't built on. Rendered as a dirt ring with a signpost. */
+/**
+ * Land you own but haven't built on. Rendered as a dirt ring with a signpost.
+ * One, not four. A plot is a promise, and the compacted town has no room left
+ * where a ring of bare dirt reads as land rather than as a stain on the paving
+ * — this one sits on the northern approach, clear of every footprint by a tile.
+ */
 export const EMPTY_PLOTS: Array<{ ty: number; tx: number }> = [
-  { ty: 62, tx: 10 }, { ty: 70, tx: 42 }, { ty: 84, tx: 16 }, { ty: 54, tx: 44 },
+  { ty: 15, tx: 16 },
 ];
 
 interface Grove { cy: number; cx: number; r: number; kind: TreeKind }
@@ -144,8 +176,12 @@ export function buildTownGrid(): Tile[][] {
   };
 
   // The paved area is a union of blobs, so the town's outline stays ragged.
-  ([[16, 15, 13, 14], [30, 25, 11, 15], [44, 17, 11, 15], [52, 33, 10, 12],
-    [64, 20, 11, 16], [38, 37, 9, 9], [72, 34, 9, 10], [78, 18, 9, 13]] as const)
+  // Weighted south: the biggest lobes are the lowest, so the town has real mass
+  // under the thumb instead of a narrow tail of paving.
+  ([[17, 22, 8, 11], [27, 22, 8, 13], [38, 22, 8, 14], [37, 31, 7, 8],
+    [49, 24, 8, 16], [58, 22, 9, 16], [56, 10, 8, 9],
+    // The fountain square and the greenhouse yard.
+    [68, 16, 8, 12], [69, 31, 7, 10]] as const)
     .forEach(([cy, cx, ry, rx]) => ellipse(cy, cx, ry, rx, 'S'));
 
   // Rock shelf with a modest fall into a pool.
@@ -161,15 +197,12 @@ export function buildTownGrid(): Tile[][] {
       rect(bx, Math.min(ay, by), w, Math.abs(by - ay) + w, 'R');
     }
   };
-  street([[15, 20], [15, 30], [25, 30], [25, 44], [13, 44], [13, 58], [27, 58], [27, 72], [20, 72], [20, 84]], 2);
-  street([[15, 24], [6, 24], [6, 36]], 2);
-  street([[25, 34], [36, 34], [36, 48]], 2);
-  street([[13, 50], [6, 50], [6, 62]], 2);
-  street([[27, 64], [38, 64], [38, 76]], 2);
+  // The spine runs the length of the map and finishes at the fountain square.
+  street([[20, 10], [20, 28], [10, 28], [10, 51], [22, 51], [22, 62], [16, 62]], 2);
+  street([[20, 19], [37, 19], [37, 44]], 2);
 
   // Pockets left deliberately empty.
-  ([[26, 34, 4, 5], [46, 7, 4, 4], [58, 9, 3, 4], [48, 40, 4, 4], [80, 11, 4, 5],
-    [76, 38, 4, 5], [34, 44, 3, 4], [68, 10, 3, 4], [22, 40, 3, 4], [86, 26, 4, 7]] as const)
+  ([[15, 7, 5, 5], [28, 38, 4, 5], [45, 8, 5, 5], [63, 41, 4, 5]] as const)
     .forEach(([cy, cx, ry, rx]) => ellipse(cy, cx, ry, rx, 'G'));
 
   EMPTY_PLOTS.forEach((p) => ellipse(p.ty, p.tx, 2, 3, 'o'));
