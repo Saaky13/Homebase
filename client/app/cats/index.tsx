@@ -8,6 +8,7 @@ import {
   Text,
   View,
 } from 'react-native';
+import { useLocalSearchParams } from 'expo-router';
 
 import AdoptionReveal from '../../components/AdoptionReveal';
 import CatAlmanacSheet from '../../components/CatAlmanacSheet';
@@ -70,6 +71,20 @@ export default function CatsTab() {
   useEffect(() => {
     setGuideContext(`cats:${tab}`);
   }, [tab, setGuideContext]);
+
+  // The inspect card's "ALMANAC ›" button deep-links here as `/cats?cat=id`,
+  // the same pattern as the guide's `/habits?section=x`: this screen keeps its
+  // tab and open entry in local state, so `/cats` alone would land on the
+  // machine, a full two taps short of the entry the button named.
+  const params = useLocalSearchParams<{ cat?: string }>();
+  useEffect(() => {
+    if (!params.cat) return;
+    const spec = CAT_ROSTER.find((c) => c.id === params.cat);
+    if (spec) {
+      setTab('almanac');
+      setEntry(spec);
+    }
+  }, [params.cat]);
 
   const handleAlmanacButtonPress = (view: 'cats' | 'drinks') => {
     const scale = view === 'cats' ? catButtonScale : drinkButtonScale;
