@@ -5,7 +5,7 @@ the rationale; `SERVE-INTERACTION.md` holds the Phase 1 interaction in full.
 This file is **what's real on disk, what's next, and which lines to touch** —
 it doesn't restate the numbers, it points at them.
 
-Branch `brew-machine` · worktree `.claude/worktrees/almanac` · no PR yet
+Branch `brew-machine` · worktree `.claude/worktrees/almanac` · PR #27
 (cut off main @ 176ed0e; `cat-almanac` merged as PR #24)
 Preview: `preview_start` name `cat-cafe-almanac` (port 8099)
 Interaction spec: **`MACHINE.md`**, which supersedes `SERVE-INTERACTION.md` §2–4
