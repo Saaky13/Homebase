@@ -536,6 +536,13 @@ export default function TownMap({ night }: { night?: boolean }) {
               cat={inspectedCat}
               recipes={state.recipes ?? []}
               bondXp={state.catStats[inspectedCat.id]?.bondXp ?? 0}
+              // A cat on the streets has no patience to spend. One walking to
+              // the café does — it is already a customer, and its window opens
+              // the moment it reaches the door.
+              customer={
+                state.cafeVisit.customers.find((c) => c.catId === inspectedCat.id) ??
+                null
+              }
               pos={cardPos}
               pointerX={cardPointerX}
               flip={cardFlip}

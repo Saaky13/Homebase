@@ -72,6 +72,21 @@ const DROP_RADIUS = 52;
 const PEARLS_PER_CAT = 5;
 
 /**
+ * How far a cat steps aside to leave the queue, in design units.
+ *
+ * The line is single-file down the middle of the room, so a cat walking out
+ * from the *front* of it has every other cat between itself and the door.
+ * Walked straight, it passes through the whole queue and the sprite you watch
+ * reach the door is the one at the back — the wrong cat looks like the one
+ * that gave up. Stepping into the aisle first is what makes the departure
+ * legible: it breaks ranks, walks down past the line, and only then leaves.
+ *
+ * 66 clears a cat's own width and still lands between the queue and the left
+ * column of tables (x 64–106), so nobody walks out through the furniture.
+ */
+const QUEUE_EXIT_AISLE = 66;
+
+/**
  * Whether a cat will answer a tap.
  *
  * Everything but a cat on its way out. It is tempting to restrict this to
@@ -524,13 +539,27 @@ export default function CafeCanvas() {
       const now = Date.now();
       const live = new Set(customers.map((c) => c.id));
 
-      // Off the list means the drink is finished and they've gone home. They
-      // still walk out rather than blinking away — `isCatOffscreen` collects
-      // them below once they're through the door.
+      // Off the list means they've gone home — either the drink is finished
+      // or the wait was. They still walk out rather than blinking away;
+      // `isCatOffscreen` collects them below once they're through the door.
+      const queueSpots = getQueueSpots(width);
+      const aisleX = width / 2 - QUEUE_EXIT_AISLE;
+      const pastLine = queueSpots[queueSpots.length - 1].y + 46;
+
       catsRef.current.forEach((cat) => {
-        if (cat.state !== 'leaving' && !live.has(cat.id)) {
-          sendCatOut(cat, width / 2, height + 110);
-        }
+        if (cat.state === 'leaving' || live.has(cat.id)) return;
+
+        // A cat going home from a table already has a clear run at the door.
+        // Only one leaving the line needs the detour — see `QUEUE_EXIT_AISLE`.
+        const inLine = cat.state === 'walkingToLine' || cat.state === 'waiting';
+        const via = inLine
+          ? [
+              { x: aisleX, y: cat.y },
+              { x: aisleX, y: Math.max(pastLine, cat.y) },
+            ]
+          : [];
+
+        sendCatOut(cat, width / 2, height + 110, via);
       });
 
       const onFloor = new Set(catsRef.current.map((cat) => cat.id));
@@ -592,6 +621,9 @@ export default function CafeCanvas() {
       // Cats standing in line show what they came for. Keyed off arrival at
       // the queue spot rather than the 'waiting' state: the queue is retargeted
       // every frame, so a lined-up cat is permanently 'walkingToLine'.
+      //
+      // How long they'll go on standing there is *not* drawn here. It lives on
+      // the inspect card instead — see `PatienceRow` in `CatInspectCard`.
       catsRef.current.forEach((cat) => {
         if (cat.state !== 'walkingToLine' && cat.state !== 'waiting') return;
         if (Math.hypot(cat.targetX - cat.x, cat.targetY - cat.y) > 4) return;
@@ -857,6 +889,12 @@ export default function CafeCanvas() {
           cat={inspectedCat}
           recipes={state.recipes ?? []}
           bondXp={state.catStats[inspectedCat.id]?.bondXp ?? 0}
+          // Read off `state`, not `customersRef`: the ref is the render loop's
+          // copy and changing it re-renders nothing, so a card fed from it
+          // would keep counting down for a cat that has already been served.
+          customer={
+            state.cafeVisit.customers.find((c) => c.id === inspected?.id) ?? null
+          }
           pos={cardPos}
           pointerX={cardPointerX}
           flip={cardFlip}

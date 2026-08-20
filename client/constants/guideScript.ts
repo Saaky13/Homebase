@@ -372,6 +372,20 @@ export const GUIDE_SCRIPT: GuideBeat[] = [
     match: (ctx) => anyHabitStreakAtLeast(ctx, 3),
   },
   {
+    // Sits above the first-time celebrations because it is the only one of
+    // them that explains a loss. A player who watches popularity fall with no
+    // idea why concludes the meter is broken, and it only needs saying once.
+    id: 'first-cat-walked-out',
+    icon: '🚪',
+    title: 'one got away',
+    kind: 'moment',
+    priority: 49,
+    actions: [GOT_IT],
+    message: () =>
+      `somebody gave up and left while you were stood right here. nobody's cross — but word gets around, and the café's a little quieter for it. the busier we are the shorter everyone's fuse gets, so a long line is something to work, not to admire.`,
+    match: (ctx) => ctx.state.catsWalkedOut > 0,
+  },
+  {
     id: 'first-cat-served',
     icon: '🐱',
     title: 'first customer',

@@ -33,6 +33,16 @@ export interface Cat {
   /** Current draw scale, eased toward `targetScale` as the cat moves. */
   scale: number;
   targetScale: number;
+  /**
+   * Corners to turn before heading for `target`, consumed one at a time.
+   *
+   * Everything else in the room walks in a straight line, and only one
+   * departure can't: a cat leaving from the *front* of the queue has the whole
+   * rest of the line between it and the door. Walked straight, it passes
+   * through every cat behind it and the sprite you watch reach the door is the
+   * one at the back — so the wrong cat looks like the one that gave up.
+   */
+  path: QueueSpot[];
 }
 
 export interface QueueSpot {
@@ -76,6 +86,7 @@ export function createCat(
     drink: null,
     scale: 1,
     targetScale: 1,
+    path: [],
   };
 }
 
@@ -114,6 +125,14 @@ export function updateCat(cat: Cat) {
     cat.x = cat.targetX;
     cat.y = cat.targetY;
 
+    // Turn the corner rather than arriving.
+    const corner = cat.path.shift();
+    if (corner) {
+      cat.targetX = corner.x;
+      cat.targetY = corner.y;
+      return;
+    }
+
     if (cat.state === 'walkingToSeat') {
       cat.state = 'seated';
       cat.seatedAt = Date.now();
@@ -130,6 +149,7 @@ export function retargetCat(cat: Cat, queueSpot: QueueSpot) {
   cat.targetX = queueSpot.x;
   cat.targetY = queueSpot.y;
   cat.state = 'walkingToLine';
+  cat.path = [];
 }
 
 export function sendCatToSeat(cat: Cat, seat: SeatSpot, seatIndex: number) {
@@ -151,9 +171,21 @@ export function sendCatToSeat(cat: Cat, seat: SeatSpot, seatIndex: number) {
   else cat.seatFacing = 'right';
 }
 
-export function sendCatOut(cat: Cat, exitX: number, exitY: number) {
-  cat.targetX = exitX;
-  cat.targetY = exitY;
+/**
+ * `via` are corners to turn on the way — see `Cat.path`. A cat going home from
+ * a table has a clear run and passes none; one walking out of the queue steps
+ * into the aisle first, so breaking ranks is the thing you see it do.
+ */
+export function sendCatOut(
+  cat: Cat,
+  exitX: number,
+  exitY: number,
+  via: QueueSpot[] = []
+) {
+  cat.path = [...via, { x: exitX, y: exitY }];
+  const first = cat.path.shift() as QueueSpot;
+  cat.targetX = first.x;
+  cat.targetY = first.y;
   cat.state = 'leaving';
   cat.seatIndex = null;
   cat.seatedAt = null;

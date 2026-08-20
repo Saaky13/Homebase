@@ -228,6 +228,7 @@ interface CafeState {
   ownedCats: string[];                       // roster ids adopted from the shelter
   catStats: Record<string, CatStat>;         // per-cat record — serve dates, day parts, bondXp
   cafeVisit: CafeVisitState;                 // who is at (or heading to) the café — the authority on cat presence
+  catsWalkedOut: number;                     // cats who gave up waiting; lifetime, so the guide can explain the loss once
   greenhouse: GreenhouseState;               // plants, benches, seed packets, misting
   revealActive: boolean;                     // adoption reveal on screen; never persisted
 }
@@ -306,6 +307,7 @@ interface CafeCustomer {
   groupId: string;          // `visit-${seq}` — groups arrive together and sit together
   setOffAt: number;         // ms epoch it set off; in line WALK_IN_MS (15s) later
   servedAt: number | null;  // ms epoch it got its cup; null while still in line
+  patienceMs: number;       // how long it will stand in line before walking out — the one stored, non-derived thing about a visit
 }
 
 interface CafeVisitState {
@@ -580,6 +582,23 @@ Popularity is a **standing**, not a score. It moves both ways.
 **What it drives:**
 - `spawnIntervalMs(popularity)`: 180,000ms at pop 0, 25,000ms at pop 100 (linear interpolation)
 - `maxGroupSize(popularity)`: 1 below 33, 2 at 33–65, 3 at 66+
+**Patience is not one of them.** It briefly was — 150s at pop 0 tightening to
+40s at pop 100, on the argument that a busy café should be a harder one. It
+lives in `constants/bonds.ts` now, set by the cat's own bond and rarity, and it
+is measured in hours. Popularity was already the difficulty knob twice over,
+and at hour scale a fuse that shortens as you get busier moved for reasons a
+player could not see. What stays here is the *consequence* of a walk-out, which
+is a popularity mechanic and remains one.
+
+**The walk-out loss** is `popularityAfterWalkouts(value, n)` —
+`value × (1 − 0.02)^n`, proportional for the same reason `decayPopularity` is:
+it makes the loss self-limiting, so you can only lose the standing you built. A
+flat penalty would be a death spiral at the bottom of the range. It is **not**
+scaled by the café multiplier — a nicer room doesn't make an ignored cat
+angrier, and a loss scaled by it would quietly make decor a liability.
+
+**It is charged wherever you are** — see convention 21 for why it no longer
+needs a screen gate.
 
 **Decay settling:** `settlePopularity(state, todayKey)` is called before every gain
 and at load time. It's a pure function in `useCafeState.tsx`. First run (no
@@ -703,21 +722,74 @@ owned cat is**: listed means inside (or walking over), absent means out in the
 town. The café renders this list, the town renders its complement, and neither
 screen invents a cat of its own.
 
-A visit stores exactly two timestamps; every phase is derived from the clock,
-never stored:
+A visit stores two timestamps and one duration; every phase is derived from
+the clock, never stored:
 
 ```
 sets off ──(WALK_IN_MS 15s)──▶ in line ──served──▶ lingers ──(LINGER_MS 60s)──▶ gone
-`setOffAt`                                `servedAt`
+`setOffAt`                       │        `servedAt`
+                                 └──(patienceMs)──▶ walks out unserved
 ```
 
+`patienceMs` is the one thing about a visit that is **stored rather than
+derived**, and for the same reason `recordCatsServed` takes the drink: it
+cannot be recovered afterwards. The window comes from the cat's bond at the
+moment it set off (`patienceWindowMs` in `bonds.ts`), and a bond moves —
+derive it live and serving one cat would retroactively extend the wait of the
+cat standing behind it, and a levelling serve would make a cat already out the
+door un-leave. Stamped once at the door, `setOffAt + WALK_IN_MS + patienceMs`
+is a fixed instant and the phase is still just the clock passing it.
+
+The predicates that read it: `leavesAt`, `hasWalkedOut`, `hasFinished`,
+`patienceLeft` (1 → 0 across the wait, and a flat 1 for anyone holding a cup)
+and `impatientCustomers`.
+
+**The queue does not empty from the front, and that is the feature.** A window
+used to be floored at the deadline of whoever was last to leave, so the line
+always drained in order. Per-cat patience makes that floor a contradiction:
+flooring Prism's half hour at the four hours a well-bonded common is owed
+erases the difference the mechanic exists to express. A cat now leaves on its
+own clock, from wherever it is standing, and `CafeCanvas` already draws that
+honestly — a departing cat steps sideways into `QUEUE_EXIT_AISLE` before
+heading for the door, so the sprite you watch leave is the one that gave up.
+
+**One floor survives, at `now + patience`.** A catch-up admits cats with a
+`setOffAt` in the past, so a replay can land one on the mat with a minute left:
+you open the app, tap it, and it walks before you can pour anything. Patience
+measures being **ignored**, and nobody could have served it while the app was
+shut, so a cat that survives the replay has its window measured from the moment
+you could first have seen it. The floor is gated on `natural > now` — applying
+it to a cat whose replayed window closed mid-catch-up would resurrect one that
+came and went, and the sweep is what keeps "you come back to whoever happens to
+be there" true.
+
+**Where you read it: the inspect card, not the floor.** Tapping a queueing cat
+opens `CatInspectCard` with a `PATIENCE` row directly above its bond — how long
+you have to decide, then what the decision is worth. It was briefly a bar over
+the cat's want bubble; nine of them at once read as a room full of alarm, where
+the whole point is that most of the queue is fine and one cat isn't. The row
+ticks itself on an interval it owns (the card is deliberately never re-rendered
+by either canvas's loop) — 10s normally and 250ms inside the last quarter hour,
+because four ticks a second across a three-hour window is forty thousand
+renders to animate a number that changes once a minute. It is left off the card
+entirely for a town cat or one already holding a cup.
+
 - **Arrivals are settled, not scheduled.** `settleCafeVisit(visit, now,
-  popularity, ownedCats)` is pure and idempotent: it sweeps out finished
+  popularity, ownedCats, catStats)` is pure and idempotent: it sweeps out finished
   lingerers, then walks the arrival clock forward one
   `spawnIntervalMs(popularity)` at a time, admitting a group per tick while
   there's room. The provider runs it every 5s and on load, so the café fills
-  at the same rate whether or not anyone is watching — and a week away fills
-  at most one caféful (the rewind is capped at `QUEUE_CAPACITY + 1` intervals).
+  at the same rate whether or not anyone is watching.
+- **A week away is the same as four hours away, and patience is why.** The
+  rewind is capped at `WALK_IN_MS + MAX_PATIENCE_MS + QUEUE_CAPACITY ×
+  WALK_STAGGER_MS` — anything called in earlier than the longest window anyone
+  has has provably already left, so replaying it would only be a loop iteration
+  ending in the sweep. The bound uses the *global* maximum rather than this
+  café's typical window, because it has to hold for whichever cat the draw
+  picks, and guessing low would silently drop a patient cat still owed its
+  spot. This is the visible cost of the rule: leave the café overnight and you
+  come back to whoever turned up in the last few hours, not to everyone who
+  ever knocked.
 - **Group members set off `WALK_STAGGER_MS` (3s) apart**, so every derived
   view is single-file for free: the town badge ticks 1, 2, 3 and the café door
   admits one cat at a time. A tail member's `setOffAt` legitimately sits a few
@@ -726,8 +798,9 @@ sets off ──(WALK_IN_MS 15s)──▶ in line ──served──▶ lingers �
 - **Caps.** `QUEUE_CAPACITY = 9` (matches the queue spots) and
   `maxInside(owned) = min(9, max(1, ceil(owned / 2)))` — half the collection
   may visit at once, so the town never empties. An unserved customer holds a
-  line spot from the moment it sets off, and the queue **fills and holds**:
-  nobody leaves unserved.
+  line spot from the moment it sets off. Occupancy inside the arrival loop is
+  asked as of `cursor`, not of `now`, so a queue of cats who left hours ago
+  can't block a catch-up.
 - **Draws are deterministic** — `roll(arrivalSeq)`, no `Math.random()` —
   because the settle runs inside a state updater React may invoke twice per
   commit. Same rule as the gacha (convention 13).
@@ -759,13 +832,24 @@ interface Cat {
   drink: BobaFlavor | null;// the cup handed over, carried until they leave
   scale: number;           // current draw scale, eased toward targetScale
   targetScale: number;     // 1 standing; SEAT_SCALE once they take a chair
+  path: QueueSpot[];       // corners to turn before `target`, consumed one at a time
 }
 ```
 
 **Cat functions:** `createCat()`, `updateCat()` (per-frame movement + scale
 easing), `retargetCat()` (reposition in queue), `sendCatToSeat()`,
-`sendCatOut()`, `isCatOffscreen()`, `drawCat(ctx, cat)` (sprite + contact
-shadow), `drawCatDrink(ctx, cat)` (the carried cup).
+`sendCatOut(cat, exitX, exitY, via)`, `isCatOffscreen()`, `drawCat(ctx, cat)`
+(sprite + contact shadow), `drawCatDrink(ctx, cat)` (the carried cup).
+
+**A cat that gives up leaves by the aisle.** Everything else in the room walks
+in a straight line, and only one departure can't: the queue is single-file down
+the middle, so a cat walking out from the *front* has the whole rest of the line
+between it and the door. Walked straight it passes through every cat behind it,
+and the sprite you watch reach the door is the one at the back — the wrong cat
+looks like the one that gave up. `sendCatOut` therefore takes `via` corners,
+which `syncCustomers` fills in for queue cats only (`QUEUE_EXIT_AISLE`, 66 units
+to the left, then down past the last queue spot). A cat going home from a table
+already has a clear run and passes none.
 
 `drawCatDrink` runs as a **separate pass** after every cat is drawn: group cats
 stand 28 apart and are ~54 wide, so a cup drawn with its own cat disappeared
@@ -947,6 +1031,7 @@ the moment the 4s anti-flicker gap lapses and can never be got rid of.
 | `resources-first-visit` | orientation | 61 | no | — | On habits:resources |
 | `habit-streak-7` | moment | 52 | no | — | Any habit has 7-day streak |
 | `habit-streak-3` | moment | 51 | no | — | Any habit has 3-day streak |
+| `first-cat-walked-out` | moment | 49 | no | — | `catsWalkedOut > 0` |
 | `first-cat-served` | moment | 48 | no | — | Total drinks served > 0 |
 | `first-habit-completed` | moment | 47 | no | — | Any habitLog has reps > 0 |
 | `first-habit-created` | moment | 46 | no | — | habits.length > 0 |
@@ -1320,10 +1405,13 @@ committing, so a double invocation can't double-charge or double-grant.
 
 ## Cat bonds (constants/bonds.ts)
 
-Serve a cat drinks it actually likes and it warms to you, and a cat that has
-warmed to you tips. It is the shelter's answer to "what is this cat *for*" once
-it is adopted and roaming: the collection stops being a checklist and starts
-being a set of regulars.
+Serve a cat drinks it actually likes and it warms to you. A cat that has warmed
+to you tips, and it waits for you. It is the shelter's answer to "what is this
+cat *for*" once it is adopted and roaming: the collection stops being a
+checklist and starts being a set of regulars.
+
+The two payouts are the same idea pointed at money and at time, and neither can
+be bought — bond XP only moves when you hand a cat a drink it actually wanted.
 
 **One number per cat.** `bondXp` lives on `CatStat` in `constants/catLore.ts`,
 alongside the serve dates and day-part tallies, and is written in exactly one
@@ -1364,11 +1452,53 @@ drink, or the optimal play becomes grinding one cat with whatever is cheapest.
 **The tip paid is the bond you walked in with.** The serve reads `bondTip`
 *before* `recordCatsServed` adds the cup's XP — see convention 19.
 
+### Patience — the other thing a bond buys
+
+How long a cat stands in line before it gives up and walks out.
+
+It used to be seconds and set by popularity, which made the café a reflex test:
+a cat you couldn't reach in two minutes was a cat you lost, so the only way to
+keep a café was to sit and watch one. That argues against the rest of the
+product. **30 minutes to 4 hours** argues for it — the café fills while you are
+away and coming back to it is the visit, the same shape as the greenhouse. You
+lose cats by forgetting for a day, not by looking away for a minute.
+
+The knock-on: arrivals are paced by *you* now. The café fills to `maxInside`
+and holds there until you serve someone, so the loop runs at the speed you show
+up at rather than at the speed of a spawn timer.
+
+**Rarity sets the base and it runs downward; bond multiplies it.** Rarity is
+otherwise pure upside — better tips, longer bond road, nicer sprite — and this
+is the one place it costs you. The fancy cat has places to be. Bond is the
+answer to that cost: a legendary you have never served is a 45-minute problem,
+one you have taken care of waits an hour and a half.
+
+`BOND_PATIENCE` is `1 / 1.15 / 1.35 / 1.6 / 2` — deliberately steeper than
+`BOND_TIP`, which tops out at +35% because it competes with the affinity
+multiplier. Nothing competes with patience, so it can afford to double, and it
+is the level reward you *feel* first: a few extra coins is arithmetic you have
+to go looking for, whereas an ultra that suddenly waits an hour is the
+difference between catching it and not.
+
+| Rarity | L1 | L2 | L3 | L4 | L5 |
+|---|---|---|---|---|---|
+| common | 2h | 2h 18m | 2h 42m | 3h 12m | **4h** |
+| rare | 1h 30m | 1h 43m | 2h | 2h 24m | 3h |
+| epic | 1h 05m | 1h 15m | 1h 28m | 1h 44m | 2h 10m |
+| legendary | 45m | 52m | 1h | 1h 12m | 1h 30m |
+| ultra | **30m** | 34m | 40m | 48m | 1h |
+
+The corners are the range exactly: ultra at L1 is 30 minutes, common at L5 is
+four hours.
+
 **Exports:** `MAX_BOND_LEVEL`, `BOND_TIP`, `BOND_CURVE`, `xpToMax(rarity)`,
 `bondLevel(xp, rarity)`, `bondTip(xp, rarity)`, `bondProgress(xp, rarity)` →
 `BondProgress` (level, fraction, into, span, remaining, maxed), and
-`tipLabel(level)` → `"+15%"` or `"—"`. Pure — no React, no state, and read
-from inside state updaters that React may invoke more than once per commit.
+`tipLabel(level)` → `"+15%"` or `"—"`; and for patience, `BOND_PATIENCE`,
+`MAX_PATIENCE_MS`, `patienceWindowMs(xp, rarity)` and `patienceLabel(ms)` →
+`"3h 12m"` / `"42m"` / `"50s"` (two units at most, and the second dropped once
+it stops mattering). Pure — no React, no state, and read from inside state
+updaters that React may invoke more than once per commit.
 
 **Where it shows:** `CatInspectCard`'s bond row (`Lv n` plus the tip), reached
 by tapping a cat on the town map or the café floor; `CatAlmanacSheet`'s bond
@@ -1531,6 +1661,10 @@ should generally not be committed with a session-local port.
   town roamers walk to the door and hand off to the café floor, a waiting
   badge sits on the town's café building, and no cat exists in both worlds at
   once
+- Patience: a queued cat carries a stamped window — 30 minutes to 4 hours, set
+  by its rarity and multiplied by its bond — shows what is left of it on the
+  inspect card above that bond, and walks out unserved through the side aisle
+  rather than back down the queue, costing 2% of standing per cat
 - Persistent state with migrations (legacy array logs → record-based, old habits → tiered,
   pre-shelter saves → seeded collection)
 - Greenhouse: 12 sockets across 3 benches, 9 species with per-species growth
@@ -1668,3 +1802,23 @@ should generally not be committed with a session-local port.
     that ever migrates. `spendPearls` is the deliberate exception — spending is
     not un-earning — and so is `claimAchievement`, which is a receipt for work
     whose pearls, and whose rank XP, were paid when the work was done.
+21. **The walk-out penalty's bound is the timescale, not a screen gate.**
+    `settleVisit` used to take a `watching` argument, fed from a ref the café
+    screen set on mount, and charged only while you were stood at the counter.
+    The reason was that at forty-second windows the arithmetic had no bound of
+    its own: if you never serve, walk-outs equal arrivals *forever* — a steady
+    state, not a spiral — so a per-cat charge on an app left open drained about
+    forty points an hour at popularity 75. That would have made popularity a
+    measure of how much café you play rather than of how much life you did.
+
+    Patience in hours supplies that bound directly. A café holds `maxInside`
+    cats and each takes half an afternoon to give up, so the worst case is a
+    few points an hour; and a return from a long absence charges for at most
+    one caféful, because the catch-up sweeps cats who came and went without
+    ever landing in state. **A week away costs exactly what a day away costs.**
+
+    With the bound in the timescale, the gate became unreachable — you would
+    have to be standing on the café screen at the instant a three-hour window
+    closed — so it is gone, along with `setCafeOpen` and `cafeOpenRef`. Losing
+    a cat is never a reflex you missed now; it is a day you didn't open the
+    app, which is exactly the thing the charge should be reading.

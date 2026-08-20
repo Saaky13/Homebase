@@ -14,20 +14,26 @@
  * A visit is a fixed lifecycle, and the state records just two moments of it:
  *
  *   sets off ──(WALK_IN_MS)──▶ in line ──served──▶ lingers ──(LINGER_MS)──▶ gone
- *   `setOffAt`                            `servedAt`
+ *   `setOffAt`                   │        `servedAt`
+ *                                └──(patienceMs)──▶ walks out unserved
  *
  * Everything in between is *derived from the clock*, never stored: a customer
  * is "walking over" until `WALK_IN_MS` after it set off, "in line" after that,
- * and swept out by the settle `LINGER_MS` after it was served. Deriving the
- * phase means the town map and the café can each ask "where is this cat right
- * now?" and get the same answer without anything having written state — a cat
- * reaching the door is not an event, it's a timestamp going stale.
+ * swept out by the settle `LINGER_MS` after it was served — or swept out
+ * unserved once it has stood in line for `patienceMs`. Deriving the phase
+ * means the town map and the café can each ask "where is this cat right now?"
+ * and get the same answer without anything having written state — a cat
+ * reaching the door is not an event, it's a timestamp going stale, and so is a
+ * cat giving up on you.
  *
  * Arrivals are settled the way popularity and the greenhouse are settled: a
  * pure function of elapsed time, run on whatever screen happens to be open, so
  * the café fills at the same rate whether you are watching it or not.
  */
 
+import { MAX_PATIENCE_MS, patienceWindowMs } from './bonds';
+import type { CatStat } from './catLore';
+import { getCat } from './catSprites';
 import { maxGroupSize, spawnIntervalMs } from './popularity';
 
 /** One cat's visit. Lives from setting off to walking back out. */
@@ -42,6 +48,20 @@ export interface CafeCustomer {
   setOffAt: number;
   /** ms epoch it was handed a cup, or null while it's still in line. */
   servedAt: number | null;
+  /**
+   * How long this cat will stand in line before giving up, stamped when it was
+   * called in.
+   *
+   * The one thing about a visit that is *stored* rather than derived, and for
+   * the same reason `recordCatsServed` takes the drink: it can't be recovered
+   * afterwards. The window comes from this cat's bond at the moment it set off
+   * (see `patienceWindowMs` in `bonds.ts`), and a bond moves — derive it live
+   * and serving a cat would retroactively extend the wait of the cat standing
+   * behind it, and a levelling serve would make a cat already out the door
+   * un-leave. Stamped once, `setOffAt + WALK_IN_MS + patienceMs` is a fixed
+   * instant, and the phase is still just the clock passing it.
+   */
+  patienceMs: number;
 }
 
 export interface CafeVisitState {
@@ -125,9 +145,69 @@ function roll(seed: number): number {
   return n - Math.floor(n);
 }
 
+/**
+ * The window this particular cat walks in with.
+ *
+ * Patience is per-cat now, not per-café: rarity sets the base and the bond you
+ * have built with *that* cat multiplies it. A cat missing from the roster or
+ * from `catStats` falls back to a common at bond zero, which is the most
+ * forgiving answer available and therefore the right one to guess with.
+ */
+function windowFor(catId: string, catStats: Record<string, CatStat>): number {
+  const rarity = getCat(catId)?.rarity ?? 'common';
+  return patienceWindowMs(catStats[catId]?.bondXp ?? 0, rarity);
+}
+
 /** Whether this customer has finished the walk over and is standing in line. */
 export function hasJoined(customer: CafeCustomer, now: number): boolean {
   return now - customer.setOffAt >= WALK_IN_MS;
+}
+
+/**
+ * The instant this cat gives up and walks out, if it hasn't been served by
+ * then. Its patience is spent standing in line, so the walk over doesn't
+ * count against it.
+ */
+export function leavesAt(customer: CafeCustomer): number {
+  return customer.setOffAt + WALK_IN_MS + customer.patienceMs;
+}
+
+/** Waited too long and gone. A served cat can never walk out — it has its cup. */
+export function hasWalkedOut(customer: CafeCustomer, now: number): boolean {
+  return customer.servedAt === null && now >= leavesAt(customer);
+}
+
+/** Sat with its drink long enough and headed home. */
+export function hasFinished(customer: CafeCustomer, now: number): boolean {
+  return customer.servedAt !== null && now - customer.servedAt >= LINGER_MS;
+}
+
+/**
+ * How much patience this cat has left, 1 on arrival down to 0 at the door.
+ *
+ * Only meaningful for a cat in line; a cat still walking over reads 1 and a
+ * served one reads 1 forever, which is what the café wants — neither of them
+ * should be wearing a timer.
+ */
+export function patienceLeft(customer: CafeCustomer, now: number): number {
+  if (customer.servedAt !== null) return 1;
+  const spent = (now - customer.setOffAt - WALK_IN_MS) / customer.patienceMs;
+  return Math.min(1, Math.max(0, 1 - spent));
+}
+
+/**
+ * Customers who have run out of patience as of `now` and are about to be swept.
+ *
+ * Read *before* settling, so the caller can charge for them: the settle
+ * removes them, and once removed there is nothing left to count. Both are pure
+ * derivations off the same clock, so passing the same `now` to each guarantees
+ * they agree about who left.
+ */
+export function impatientCustomers(
+  visit: CafeVisitState,
+  now: number
+): CafeCustomer[] {
+  return visit.customers.filter((c) => hasWalkedOut(c, now));
 }
 
 /** Cats standing in line right now — what the café-door badge counts. */
@@ -174,16 +254,19 @@ export function settleCafeVisit(
   visit: CafeVisitState,
   now: number,
   popularity: number,
-  ownedCats: string[]
+  ownedCats: string[],
+  catStats: Record<string, CatStat>
 ): CafeVisitState {
   const interval = spawnIntervalMs(popularity);
   const cap = maxInside(ownedCats.length);
 
-  // Finished their cup and gone home. This is the only way a served cat
-  // leaves, on either screen — the café animates the walk-out off the back of
-  // it, and the town respawns the roamer at the café door off the same change.
+  // Two ways out, and both are a timestamp going stale rather than an event:
+  // the cup is finished, or the wait ran out. This is the only way a cat
+  // leaves on either screen — the café animates the walk-out off the back of
+  // the list changing, and the town respawns the roamer at the café door off
+  // the same change, which is why a cat that gives up needed no new plumbing.
   const customers = visit.customers.filter(
-    (c) => c.servedAt === null || now - c.servedAt < LINGER_MS
+    (c) => !hasFinished(c, now) && !hasWalkedOut(c, now)
   );
   let changed = customers.length !== visit.customers.length;
 
@@ -195,11 +278,19 @@ export function settleCafeVisit(
       ? visit.lastArrivalAt
       : now - interval;
 
-  // A week away is the same as ten minutes away: the café only holds so many,
-  // and the rest of the town's cats were never going to fit. Rewinding to just
-  // enough intervals to fill it keeps the loop bounded without pretending the
-  // absence didn't happen.
-  let cursor = Math.max(anchor, now - interval * (QUEUE_CAPACITY + 1));
+  // A week away is the same as four hours away, and patience is why: a cat
+  // called in longer ago than the longest window anyone has has provably left
+  // already, so replaying it would only be a loop iteration that ends in the
+  // sweep below. `MAX_PATIENCE_MS`, not this café's typical window — the bound
+  // has to hold for whichever cat the draw happens to pick, and guessing low
+  // would silently drop a patient cat that was still owed its spot.
+  //
+  // This is the visible cost of the rule. The café doesn't hold a line for you
+  // indefinitely — leave it overnight and you come back to whoever turned up in
+  // the last few hours, not to everyone who ever knocked.
+  const survivable =
+    WALK_IN_MS + MAX_PATIENCE_MS + QUEUE_CAPACITY * WALK_STAGGER_MS;
+  let cursor = Math.max(anchor, now - survivable);
   let seq = visit.arrivalSeq;
 
   while (cursor + interval <= now) {
@@ -208,14 +299,30 @@ export function settleCafeVisit(
     // Unserved customers hold a line spot whether they've reached it yet or
     // not — a spot is claimed the moment a cat sets off, or the settle could
     // call in twelve cats for nine spots while they were all mid-walk.
-    const unserved = customers.filter((c) => c.servedAt === null).length;
-    const room = Math.min(QUEUE_CAPACITY - unserved, cap - customers.length);
+    //
+    // Occupancy is asked as of `cursor`, not of `now`, so a catch-up plays out
+    // in order: a cat called in early in a long absence frees its spot part
+    // way through, exactly as it would have if anyone had been watching. Asked
+    // as of `now` instead, a queue of cats who left hours ago would block the
+    // whole rewind and you'd come back to an empty café.
+    let waiting = 0;
+    let present = 0;
+    for (const c of customers) {
+      if (hasWalkedOut(c, cursor)) continue;
+      present++;
+      if (c.servedAt === null) waiting++;
+    }
+
+    const room = Math.min(QUEUE_CAPACITY - waiting, cap - present);
     // The clock keeps running against a full café — the door just doesn't open.
     if (room <= 0) continue;
 
     // A cat can't visit twice at once: anyone already here (or on the way) is
-    // out of the draw. Everyone else is fair game.
-    const here = new Set(customers.map((c) => c.catId));
+    // out of the draw. One that walked out earlier in this same catch-up is
+    // back in it, though — it left, and coming back later is a second visit.
+    const here = new Set(
+      customers.filter((c) => !hasWalkedOut(c, cursor)).map((c) => c.catId)
+    );
     const pool = ownedCats.filter((id) => !here.has(id));
     if (!pool.length) continue;
 
@@ -226,18 +333,46 @@ export function settleCafeVisit(
       pool.length
     );
 
+    // The queue does not necessarily empty from the front, and that is the
+    // point of the feature rather than a flaw in it. A window used to be
+    // floored at the deadline of whoever was last to leave, so the line always
+    // drained in order; per-cat patience makes that floor a contradiction —
+    // flooring Prism's half hour at the four hours a well-bonded common is
+    // owed would erase the difference the mechanic exists to express.
+    //
+    // So a cat leaves on its own clock and can leave from the middle of the
+    // line. `CafeCanvas` already draws that honestly: a departing cat steps
+    // sideways into the aisle before heading for the door, so the sprite you
+    // watch leave is the one that actually gave up, wherever it was standing.
     const groupId = `visit-${seq}`;
     for (let i = 0; i < size; i++) {
       const pick = pool.splice(Math.floor(roll(seq * 31 + i * 7 + 1) * pool.length), 1)[0];
+      // Staggered, so the group files in one cat at a time — see
+      // WALK_STAGGER_MS. A tail member's departure can sit slightly in the
+      // future until its turn comes; pruneCustomers knows to allow that.
+      const setOffAt = cursor + i * WALK_STAGGER_MS;
+      const patience = windowFor(pick, catStats);
+
+      // What the clock alone says: set off, walked in, stood there `patience`.
+      const natural = setOffAt + WALK_IN_MS + patience;
+
+      // A cat admitted by a catch-up set off in the *past*, so a replay can
+      // land one on the mat with a minute left — you open the app, tap it,
+      // and it walks before you can pour anything. Patience is meant to
+      // measure being ignored, and nobody could have served it while the app
+      // was shut. So a cat that survives to `now` gets its window measured
+      // from `now`, and one whose replayed window closed earlier is still
+      // swept below exactly as before: the floor only ever applies to a cat
+      // you can actually see, and never resurrects one that came and went.
+      const deadline = natural > now ? Math.max(natural, now + patience) : natural;
+
       customers.push({
         id: `${groupId}-${i}`,
         catId: pick,
         groupId,
-        // Staggered, so the group files in one cat at a time — see
-        // WALK_STAGGER_MS. A tail member's departure can sit slightly in the
-        // future until its turn comes; pruneCustomers knows to allow that.
-        setOffAt: cursor + i * WALK_STAGGER_MS,
+        setOffAt,
         servedAt: null,
+        patienceMs: deadline - setOffAt - WALK_IN_MS,
       });
     }
 
@@ -245,9 +380,18 @@ export function settleCafeVisit(
     changed = true;
   }
 
+  // Anyone called in *during* the catch-up whose window closed before we
+  // reached `now` came and went while the app was shut. They're swept here
+  // rather than never admitted, so the occupancy above stays honest about the
+  // café having been full at the time — and because they never landed in
+  // state, nothing charges you for them. You are only billed for cats you
+  // could have seen.
+  const present = customers.filter((c) => !hasWalkedOut(c, now));
+  if (present.length !== customers.length) changed = true;
+
   if (!changed && cursor === visit.lastArrivalAt) return visit;
 
-  return { customers, lastArrivalAt: cursor, arrivalSeq: seq };
+  return { customers: present, lastArrivalAt: cursor, arrivalSeq: seq };
 }
 
 /** Marks customers as served, so they stop queueing and start drinking. */
@@ -281,7 +425,8 @@ export function markServed(
 export function pruneCustomers(
   visit: CafeVisitState,
   ownedCats: string[],
-  now: number
+  now: number,
+  catStats: Record<string, CatStat>
 ): CafeVisitState {
   const owned = new Set(ownedCats);
   const seen = new Set<string>();
@@ -291,13 +436,41 @@ export function pruneCustomers(
   // stagger is garbage.
   const latestValidSetOff = now + QUEUE_CAPACITY * WALK_STAGGER_MS;
 
-  const customers = visit.customers.filter((c) => {
-    if (!owned.has(c.catId) || seen.has(c.catId)) return false;
-    if (!Number.isFinite(c.setOffAt) || c.setOffAt > latestValidSetOff) return false;
-    if (c.servedAt !== null && (!Number.isFinite(c.servedAt) || c.servedAt > now)) return false;
-    seen.add(c.catId);
-    return true;
-  });
+  let touched = false;
+  const customers: CafeCustomer[] = [];
 
-  return customers.length === visit.customers.length ? visit : { ...visit, customers };
+  for (const c of visit.customers) {
+    if (!owned.has(c.catId) || seen.has(c.catId)) {
+      touched = true;
+      continue;
+    }
+    if (!Number.isFinite(c.setOffAt) || c.setOffAt > latestValidSetOff) {
+      touched = true;
+      continue;
+    }
+    if (c.servedAt !== null && (!Number.isFinite(c.servedAt) || c.servedAt > now)) {
+      touched = true;
+      continue;
+    }
+    seen.add(c.catId);
+
+    if (Number.isFinite(c.patienceMs) && c.patienceMs > 0) {
+      customers.push(c);
+      continue;
+    }
+
+    // A save written before cats could get bored carries no window, and its
+    // `setOffAt`s are as old as the save — measure from those and every cat in
+    // it is evicted on the load that introduces the rule, at a cost. So the
+    // window is measured from *now* instead, the same courtesy
+    // `settlePopularity` extends on its first run: the mechanic starts today,
+    // and nobody is charged for time they spent waiting before it existed.
+    touched = true;
+    customers.push({
+      ...c,
+      patienceMs: now + windowFor(c.catId, catStats) - c.setOffAt - WALK_IN_MS,
+    });
+  }
+
+  return touched ? { ...visit, customers } : visit;
 }
