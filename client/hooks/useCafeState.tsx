@@ -21,6 +21,7 @@ import {
   cafeQualityMultiplier,
   clampPopularity,
   decayPopularity,
+  popularityAfterWalkouts,
   popularityForRep,
   POPULARITY_GAINS,
 } from '../constants/popularity';
@@ -34,6 +35,7 @@ import {
 import { DRINKS, STARTER_RECIPES, type DrinkId } from '../constants/drinks';
 import {
   emptyCafeVisit,
+  impatientCustomers,
   markServed,
   pruneCustomers,
   settleCafeVisit,
@@ -257,6 +259,20 @@ export interface CafeState {
    */
   cafeVisit: CafeVisitState;
   /**
+   * Cats who gave up waiting and walked out, ever.
+   *
+   * Kept because a mechanic that quietly drains your standing with nothing to
+   * point at reads as a bug rather than a rule — the guide needs something to
+   * match on to explain it, once. A lifetime tally rather than a daily one:
+   * it exists to be non-zero, not to be totalled.
+   *
+   * Counts exactly what was charged for, which is why it moves only when the
+   * café is the screen you are on. A cat that came and went while you were
+   * doing habits cost you nothing, so claiming it in a tally you are shown
+   * would be a lie about a loss you never took.
+   */
+  catsWalkedOut: number;
+  /**
    * What the almanac remembers about each owned cat: when it arrived, and a
    * four-slot tally of when you've served it. Keyed by cat id and kept in step
    * with `ownedCats` by `backfillCatStats` on load, so no owned cat can lack a
@@ -375,6 +391,7 @@ const initialState: CafeState = {
   claimedAchievements: [],
   ownedCats: [...STARTER_CATS],
   cafeVisit: emptyCafeVisit(),
+  catsWalkedOut: 0,
   catStats: backfillCatStats(undefined, STARTER_CATS),
   recipes: [...STARTER_RECIPES],
   revealActive: false,
@@ -578,17 +595,56 @@ function settleGreenhouse(state: CafeState, todayKey: string): CafeState {
  * above — the café fills on the spawn interval, which is minutes, not days.
  * Same contract otherwise: pure, idempotent within a tick, and safe to run
  * from whichever screen happens to be open.
+ *
+ * **Walk-outs are charged wherever you are.** They used to be charged only
+ * while the café floor was the screen you were on, because at the old
+ * forty-second windows the arithmetic had no bound of its own: walk-outs equal
+ * arrivals forever, so an app left open drained about forty points an hour, and
+ * popularity would have measured how much café you played rather than how much
+ * life you did.
+ *
+ * Patience in hours supplies the bound the gate was standing in for. A café
+ * holds `maxInside` cats and each takes half an afternoon to give up, so the
+ * worst case is a few points an hour rather than forty — and a return from a
+ * long absence charges for at most one caféful, because the catch-up sweeps
+ * cats who came and went without ever landing in state. A week away therefore
+ * costs exactly what a day away costs.
+ *
+ * That bound is what lets the charge land honestly. With hours on the clock,
+ * losing a cat is never a reflex you missed; it is a day you didn't open the
+ * app. Gating that on being at the counter would have meant the charge could
+ * essentially never fire — you would have to be standing on the café screen at
+ * the instant a three-hour window closed.
  */
 function settleVisit(state: CafeState, now: number): CafeState {
+  // Counted before the settle, because the settle is what removes them and a
+  // swept customer leaves nothing behind to count. Same `now` to both, so the
+  // two derivations cannot disagree about who left.
+  const walkedOut = impatientCustomers(state.cafeVisit, now).length;
+
   const visit = settleCafeVisit(
     state.cafeVisit,
     now,
     state.popularity,
-    state.ownedCats
+    state.ownedCats,
+    state.catStats
   );
   // Identity is the signal that nothing happened — returning a new state object
   // here would re-render both canvases on every five-second tick.
-  return visit === state.cafeVisit ? state : { ...state, cafeVisit: visit };
+  if (visit === state.cafeVisit) return state;
+  if (!walkedOut) return { ...state, cafeVisit: visit };
+
+  // Convention 2 says settle decay before a gain, and this deliberately
+  // doesn't: it is a loss, and both decay and the walk-out loss are
+  // multiplicative, so they commute — charging first and decaying later lands
+  // on the same number. Reaching for `settlePopularity` here would drag a date
+  // key into a settle that measures in milliseconds, for no arithmetic gain.
+  return {
+    ...state,
+    cafeVisit: visit,
+    popularity: popularityAfterWalkouts(state.popularity, walkedOut),
+    catsWalkedOut: state.catsWalkedOut + walkedOut,
+  };
 }
 
 /**
@@ -794,6 +850,16 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
     stateRef.current = state;
   }, [state]);
 
+  /**
+   * Whether the café floor is the screen you are on, set by
+   * `app/cafe/index.tsx` on mount and read by the five-second settle.
+   *
+   * A ref rather than a state field so it is neither persisted nor reset on
+   * load — the reset would race a screen that mounted while AsyncStorage was
+   * still reading — and so that walking into the room doesn't re-render two
+   * canvases to say something no drawing depends on. See `settleVisit`.
+   */
+
   useEffect(() => {
     const loadState = async () => {
       try {
@@ -923,8 +989,21 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
         // already in line rather than an empty room that starts filling from
         // the moment you look at it. Popularity is read *after* its own settle,
         // since a neglected café should let people in more slowly.
+        //
+        // This is also where the walk-out charge usually lands: the cats billed
+        // for are the ones who were still in the café when you last closed it
+        // and have since run out of patience — at most a caféful, however long
+        // you were gone.
         const opened = settleVisit(
-          { ...grown, cafeVisit: pruneCustomers(grown.cafeVisit, grown.ownedCats, Date.now()) },
+          {
+            ...grown,
+            cafeVisit: pruneCustomers(
+              grown.cafeVisit,
+              grown.ownedCats,
+              Date.now(),
+              grown.catStats
+            ),
+          },
           Date.now()
         );
 

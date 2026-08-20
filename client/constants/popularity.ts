@@ -149,3 +149,40 @@ export function maxGroupSize(popularity: number): number {
   if (popularity >= 33) return 2;
   return 1;
 }
+
+/**
+ * Patience — how long a cat waits before walking out — used to live here, set
+ * by popularity on the argument that a busy café should be a harder one.
+ *
+ * It moved to `constants/bonds.ts`, where it is set by the cat's bond and
+ * rarity instead. Two reasons, both about the number being *readable*: at
+ * hour scale a fuse that shortens as you get busier moved for reasons a player
+ * can't see, and popularity was already the difficulty knob twice over — it
+ * buys more cats and bigger groups. What is left here is the *consequence* of
+ * a walk-out, which is a popularity mechanic and stays one.
+ */
+
+
+/**
+ * What one cat walking out unserved costs, as a fraction of current standing.
+ *
+ * Proportional rather than flat, for exactly the reason `decayPopularity` is:
+ * it makes the loss self-limiting. A flat penalty would be a death spiral at
+ * the bottom of the range — a quiet café hands you one cat every three minutes
+ * and would drain toward zero if you missed a few, with nothing left to draw
+ * cats back in. Proportionally, nine walk-outs cost a café at 100 about
+ * seventeen points and a café at 10 about one and a half, which is the right
+ * shape: you can only lose the standing you actually built.
+ *
+ * It is not scaled by the café multiplier. A nicer room does not make an
+ * ignored cat angrier — the multiplier is a bonus on work done, and a loss
+ * scaled by it would quietly make decor a liability.
+ */
+export const WALKOUT_LOSS_RATE = 0.02; // ⚑ tunable
+
+export function popularityAfterWalkouts(value: number, count: number): number {
+  if (count <= 0 || value <= 0) return clampPopularity(value);
+
+  const left = value * Math.pow(1 - WALKOUT_LOSS_RATE, count);
+  return left < ZERO_SNAP_THRESHOLD ? 0 : clampPopularity(left);
+}

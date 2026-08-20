@@ -1,10 +1,16 @@
 /**
  * How well you know a cat, and what that pays.
  *
- * Bond is one number that goes up and tips you coins — no perks, no spawn
- * weighting, nothing unlocked behind a level. The whole feature is: serve a cat
- * drinks it actually likes, and it starts paying you a little more than it used
- * to. A relationship you can read off a single bar.
+ * Bond is one number that goes up, and it buys exactly two things: a coin tip
+ * on every cup that cat buys, and how long that cat will wait in line for you.
+ * No spawn weighting, nothing unlocked behind a level. The whole feature is:
+ * serve a cat drinks it actually likes, and it gets both more generous and more
+ * forgiving. A relationship you can read off a single bar.
+ *
+ * The two payouts are the same idea pointed at money and at time. A cat that
+ * knows you tips you, and a cat that knows you waits for you — and neither is
+ * something you can buy, because bond XP only moves when you hand a cat a drink
+ * it actually wanted.
  *
  * **Level is derived, never stored.** `CatStat` holds `xp` alone, and level,
  * tip and progress all fall out of it. Storing a level beside the xp that
@@ -130,4 +136,108 @@ export function bondProgress(xp: number, rarity: Rarity): BondProgress {
 export function tipLabel(level: number): string {
   const tip = BOND_TIP[level] ?? 0;
   return tip > 0 ? `+${Math.round(tip * 100)}%` : '—';
+}
+
+/**
+ * How long a cat will stand in line before it gives up and walks out.
+ *
+ * ── Why it is measured in hours ──────────────────────────────────────────
+ *
+ * It used to be seconds — 150s at popularity 0 down to 40s at 100 — and that
+ * made the café a reflex test. A cat you couldn't reach in two minutes was a
+ * cat you lost, which meant the only way to keep a café was to sit and watch
+ * one, and this is an app whose entire thesis is that the work happens
+ * somewhere else. A timer that punishes you for closing the app is arguing
+ * against the rest of the product.
+ *
+ * At 30 minutes to 4 hours it argues for it instead: the café fills while you
+ * are away, and coming back to it is the visit. You lose cats by forgetting for
+ * a day, not by looking away for a minute — the same shape as the greenhouse,
+ * which is the other half of the economy that can go backwards through neglect
+ * alone, and which also measures in days rather than in seconds.
+ *
+ * The knock-on is that arrivals are now paced by *you*: the café fills to
+ * `maxInside` and holds there until you serve someone. Serving is what makes
+ * room for the next cat, so the loop runs at the speed you show up at rather
+ * than at the speed of a spawn timer.
+ *
+ * ── Why bond and rarity, and not popularity ──────────────────────────────
+ *
+ * Popularity used to set it, on the argument that a busy café should be harder.
+ * But popularity already buys more cats and bigger groups, and at hour scale a
+ * shorter fuse stopped reading as difficulty and started reading as noise — the
+ * number on the card moved for reasons you couldn't see or influence.
+ *
+ * Bond and rarity are both legible from the inspect card you read it on:
+ *
+ *   rarity — the base, and it runs *downward*. A common will wait all
+ *            afternoon; Prism gives you half an hour. Rarity is otherwise pure
+ *            upside — better tips, longer bond road, nicer sprite — and this is
+ *            the one place it costs you something. The fancy cat has places to
+ *            be.
+ *   bond   — a multiplier, doubling across the five levels, which is the
+ *            answer to that cost. A legendary you have never served is a
+ *            45-minute problem; one you have taken care of will wait an hour
+ *            and a half. You earn a rare cat's patience the same way you earn
+ *            its tip.
+ *
+ * The corners are the stated range exactly: ultra at L1 is 30 minutes, common
+ * at L5 is 4 hours.
+ */
+const RARITY_PATIENCE_MS: Record<Rarity, number> = {
+  //                    L1        L5
+  common: 120 * 60000, //  2h00 →  4h00  ⚑ tunable
+  rare: 90 * 60000, //     1h30 →  3h00  ⚑ tunable
+  epic: 65 * 60000, //     1h05 →  2h10  ⚑ tunable
+  legendary: 45 * 60000, //  45m →  1h30  ⚑ tunable
+  ultra: 30 * 60000, //      30m →  1h00  ⚑ tunable
+};
+
+/**
+ * What each bond level multiplies the base window by.
+ *
+ * Shaped like `BOND_TIP` and deliberately steeper than it: the tip tops out at
+ * +35% because it competes with the affinity match, but nothing competes with
+ * patience, so it can afford to double. It is also the level reward you feel
+ * first — a few extra coins is arithmetic you have to go looking for, whereas
+ * an ultra that suddenly waits an hour is the difference between catching it
+ * and not.
+ */
+export const BOND_PATIENCE: Record<number, number> = {
+  1: 1,
+  2: 1.15,
+  3: 1.35,
+  4: 1.6,
+  5: 2,
+};
+
+/** The longest any cat can ever wait — what a catch-up has to rewind past. */
+export const MAX_PATIENCE_MS = Math.max(
+  ...Object.values(RARITY_PATIENCE_MS)
+) * BOND_PATIENCE[MAX_BOND_LEVEL];
+
+export function patienceWindowMs(xp: number, rarity: Rarity): number {
+  return Math.round(
+    RARITY_PATIENCE_MS[rarity] * (BOND_PATIENCE[bondLevel(xp, rarity)] ?? 1)
+  );
+}
+
+/**
+ * `3h 12m`, `42m`, `50s` — a wait said at the coarsest unit that still tells
+ * you something.
+ *
+ * Two units at most, and the second is dropped once it stops mattering: `3h`
+ * rather than `3h 04m`, because at three hours nobody is counting minutes.
+ * Seconds only appear under a minute, where they are the whole story.
+ */
+export function patienceLabel(ms: number): string {
+  const secs = Math.max(0, Math.ceil(ms / 1000));
+  if (secs < 60) return `${secs}s`;
+
+  const mins = Math.round(secs / 60);
+  if (mins < 60) return `${mins}m`;
+
+  const hours = Math.floor(mins / 60);
+  const rest = mins % 60;
+  return rest >= 5 ? `${hours}h ${rest}m` : `${hours}h`;
 }

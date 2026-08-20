@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Animated,
   LayoutChangeEvent,
@@ -14,7 +14,8 @@ import { CupSprite } from './CupSprite';
 import { preferencesFor, serveOutcome } from '../constants/affinity';
 import { DRINKS, DRINK_INK, type DrinkId } from '../constants/drinks';
 import { RARITY_STYLE, type CatSpec } from '../constants/catSprites';
-import { bondProgress, bondTip, tipLabel } from '../constants/bonds';
+import { bondProgress, bondTip, patienceLabel, tipLabel } from '../constants/bonds';
+import { leavesAt, patienceLeft, type CafeCustomer } from '../constants/cafeVisit';
 import { colors } from '../constants/colors';
 
 /**
@@ -33,7 +34,9 @@ import { colors } from '../constants/colors';
  *
  * The bond row sits directly under the header, above the drinks: it is the
  * one line on the card that is about *this* cat rather than about its species,
- * and it changes as you play.
+ * and it changes as you play. Patience sits directly above it — the two rows
+ * that are about this cat now, in the order you'd want them: how long you have
+ * to decide, then what the decision is worth.
  *
  * **Position is driven by `Animated.Value`s, not props.** Both callers move
  * their cats inside a `requestAnimationFrame` loop that deliberately never
@@ -236,6 +239,87 @@ function DrinkRow({
 }
 
 /**
+ * Under this much time left, the bar turns berry — the room's only alarming
+ * hue — and the interval speeds up to keep the seconds honest.
+ *
+ * A wall-clock margin rather than a fraction of the window, because the windows
+ * differ by a factor of eight. A third of a well-bonded common's four hours is
+ * eighty minutes, which is not an emergency; a quarter of an hour is one
+ * whoever is standing there, and it is roughly how long it takes to notice the
+ * café, pick a drink and brew it.
+ */
+const PATIENCE_LOW_MS = 15 * 60000;
+
+/**
+ * How often the row re-reads the clock.
+ *
+ * Four times a second is right for a countdown you are watching tick away, and
+ * absurd for one with three hours left on it — that is 43,000 renders to move a
+ * bar by its own width. So the row slows down when the number it shows is
+ * measured in minutes, and speeds back up for the last quarter of an hour,
+ * which is the only stretch where a second is worth anything.
+ */
+const TICK_FAST_MS = 250;
+const TICK_SLOW_MS = 10000;
+
+/**
+ * How long this one will go on standing there.
+ *
+ * Only for a cat that is actually queueing. A cat out in the town, or one
+ * already sat down with its cup, has no window running and the row is left off
+ * the card entirely rather than drawn full — an untouched bar reads as a timer
+ * that has not started yet, which is a different and wrong claim.
+ *
+ * **It ticks itself.** The card is deliberately never re-rendered by its
+ * parents' render loops (see the note at the top), so the countdown owns a
+ * quarter-second interval instead of taking a prop. Keeping that state down
+ * here rather than on the card is what stops the sprites, the cup rows and the
+ * two lists re-rendering four times a second to move one bar.
+ */
+function PatienceRow({ customer }: { customer: CafeCustomer }) {
+  const [, tick] = useState(0);
+
+  const now = Date.now();
+  const left = patienceLeft(customer, now);
+  const remaining = Math.max(0, leavesAt(customer) - now);
+  const low = remaining <= PATIENCE_LOW_MS;
+
+  useEffect(() => {
+    const id = setInterval(
+      () => tick((n) => n + 1),
+      low ? TICK_FAST_MS : TICK_SLOW_MS
+    );
+    return () => clearInterval(id);
+    // Re-armed when the row crosses into its last quarter hour, and never
+    // otherwise: `low` only ever flips once per visit, so this is not the
+    // every-render interval churn it looks like.
+  }, [low]);
+
+  return (
+    <View style={styles.bond}>
+      <Text style={styles.bondLabel}>PATIENCE</Text>
+      <View style={styles.bondTrack}>
+        <View
+          style={[
+            styles.bondFill,
+            {
+              width: `${Math.round(left * 100)}%`,
+              backgroundColor: low ? colors.coral : colors.accentGold,
+            },
+          ]}
+        />
+      </View>
+      {/* The number, not just the bar. A bar says "running out"; `2h 40m`
+          says whether this is something to do now or something to remember
+          before bed. */}
+      <Text style={[styles.patienceLeft, low && styles.patienceLeftLow]}>
+        {patienceLabel(remaining)}
+      </Text>
+    </View>
+  );
+}
+
+/**
  * How well you know this one, and what it tips.
  *
  * One row, not a panel: the level, the coin tip it currently pays, and a well
@@ -298,6 +382,7 @@ export default function CatInspectCard({
   cat,
   recipes,
   bondXp,
+  customer,
   pos,
   pointerX,
   flip,
@@ -310,6 +395,12 @@ export default function CatInspectCard({
   recipes: DrinkId[];
   /** This cat's banked bond XP. Level and tip derive from it — see `bonds.ts`. */
   bondXp: number;
+  /**
+   * This cat's visit, if it has one. `null` for a cat out in the town, and the
+   * patience row is dropped once it has been served — a cat with a cup in
+   * front of it is not waiting for anything.
+   */
+  customer: CafeCustomer | null;
   pos: Animated.ValueXY;
   pointerX: Animated.Value;
   /** 0 when the card is above the cat, 1 when below. Picks which tail shows. */
@@ -371,6 +462,8 @@ export default function CatInspectCard({
       </View>
 
       <View style={styles.rule} />
+
+      {customer && customer.servedAt === null && <PatienceRow customer={customer} />}
 
       <BondRow cat={cat} xp={bondXp} />
 
@@ -502,6 +595,11 @@ const styles = StyleSheet.create({
   // Gold, because it is coins — the same colour the pills pay them out in.
   bondTip: { fontSize: 9, fontWeight: '900', color: colors.accentGold },
   bondNext: { fontSize: 8, fontWeight: '700', color: colors.mediumGray },
+
+  // Sized like `bondLevel` so the two rows' right edges line up, which is what
+  // makes them read as a pair rather than as two unrelated meters.
+  patienceLeft: { fontSize: 9, fontWeight: '900', color: colors.brown700 },
+  patienceLeftLow: { color: colors.coral },
 
   // Same `gap` as a drink row, so the legend's right-aligned columns land
   // exactly over the figures they name. Its own margins replace the label's,
