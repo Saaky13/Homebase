@@ -58,14 +58,14 @@ cat cafe/
     ├── app/                 # expo-router pages
     │   ├── _layout.tsx      # root layout (CafeProvider, TopBar, GuideOverlay, Stack)
     │   ├── index.tsx        # TownScreen — the home screen (pixel-art town map)
-    │   ├── cafe/index.tsx   # CafeTab — Skia café floor with cats, queue, serve button
+    │   ├── cafe/index.tsx   # CafeTab — Skia café floor with cats, queue, drag-to-serve
     │   ├── habits/index.tsx # HabitsTab — the "Growth Hub" (~1540 lines, all 8 sections + hub grid)
     │   ├── shop/index.tsx   # ShopTab — coin-based shop (flavors, decor, upgrades)
     │   ├── cats/index.tsx   # CatsTab — the Cat Shelter (Adopt + Collection tabs)
     │   └── habit-form.tsx   # modal form for creating/editing habits
     │
     ├── components/
-    │   ├── CafeCanvas.tsx   # Skia game loop — cat spawning, queuing, seating, serving
+    │   ├── CafeCanvas.tsx   # Skia game loop — mirrors cafeVisit: arrivals, queue, seating, serving
     │   ├── CafeCanvasHost.tsx        # web entry — defers CafeCanvas until CanvasKit loads
     │   ├── CafeCanvasHost.native.tsx # native entry — re-exports CafeCanvas directly
     │   ├── skiaCanvas2d.ts  # Canvas2D-shaped facade over Skia's imperative canvas
@@ -101,6 +101,7 @@ cat cafe/
     │   ├── bobaCup.ts       # Generated 20×30 boba cup grid — 3 flavours, variable fill
     │   ├── cafeData.ts      # Legacy cat roster (7), shop items (7), reflection prompts (4), café levels (5)
     │   ├── cafePalette.ts   # Café interior palette + its night variant
+    │   ├── cafeVisit.ts     # Café visits as state — two timestamps per customer, phases derived from the clock
     │   ├── catSprites.ts    # Procedural pixel-art cat system — 36 palettes, 9 patterns, grid assembly, roster of 36 cats
     │   ├── colors.ts        # Shared colour palette (cream, brown, gold, pastels, etc.)
     │   ├── gacha.ts         # Adoption draw — rarity weights, pickCat, starters, save seeding
@@ -212,6 +213,7 @@ interface CafeState {
   focusTimer: FocusTimer;                    // focus session state
   claimedAchievements: string[];             // achievement ids whose pearls were claimed
   ownedCats: string[];                       // roster ids adopted from the shelter
+  cafeVisit: CafeVisitState;                 // who is at (or heading to) the café — the authority on cat presence
   greenhouse: GreenhouseState;               // plants, benches, seed packets, misting
   revealActive: boolean;                     // adoption reveal on screen; never persisted
 }
@@ -284,6 +286,20 @@ interface GreenhouseState {
   lastSettledDate: string | null;// dateKey through which thirst was applied
 }
 
+interface CafeCustomer {
+  id: string;               // unique per visit — `${groupId}-${i}`; the café's cat entity reuses it
+  catId: string;            // roster id — who this is out in the town
+  groupId: string;          // `visit-${seq}` — groups arrive together and sit together
+  setOffAt: number;         // ms epoch it set off; in line WALK_IN_MS (15s) later
+  servedAt: number | null;  // ms epoch it got its cup; null while still in line
+}
+
+interface CafeVisitState {
+  customers: CafeCustomer[];   // inside or en route — absent means out in the town
+  lastArrivalAt: number;       // ms epoch the arrival clock has been advanced to
+  arrivalSeq: number;          // groups ever dispatched — id source + deterministic draw seed
+}
+
 type PlantResult =
   | { ok: true; plant: Plant }
   | { ok: false; reason: 'seed' | 'occupied' | 'locked' };
@@ -297,8 +313,10 @@ type AdoptResult =
 `@focus_cafe_state_v2`. On load, the provider runs migrations for legacy habit
 formats (old array-based logs → Record-based, old habits without tiers → anchor
 default), seeds `ownedCats` for pre-shelter saves via `seedOwnedCats()` (starters
-plus one common per `cat-*` item previously bought in the Market), and recomputes
-popularity decay.
+plus one common per `cat-*` item previously bought in the Market), recomputes
+popularity decay, and launders `cafeVisit.customers` through `pruneCustomers()`
+— dropping customers whose cat left the collection, duplicate cats, and
+malformed timestamps.
 
 **Initial state:** 100 pearls, 0 coins, level 1, popularity 0, empty habits/logs/todos,
 `ownedCats: [...STARTER_CATS]` (mochi, clover, pebble).
@@ -335,6 +353,7 @@ These are the functions available on the context object returned by `useCafeStat
 | `addBoba` | `(type, amount?) => void` | Adds to bobaInventory |
 | `addCatToQueue` | `(cat) => void` | Legacy queue cat addition |
 | `updateQueueWaitTimes` | `() => void` | Legacy queue time update |
+| `serveCustomers` | `(customerIds: string[]) => void` | Stamps `servedAt` on café customers (`markServed`); they linger `LINGER_MS` then go home |
 | `unlockItem` | `(itemId: string) => boolean` | Adds to unlockedItems array |
 | `applyVisualUpgrade` | `(type, styleValue, itemId?) => void` | Changes café visual variant + unlocks item |
 | `addHabit` | `(habit: Omit<Habit, 'id' \| 'color'>) => void` | Creates new habit with auto-id and auto-color |
@@ -579,12 +598,60 @@ doesn't use.
 Drawing code targets `Ctx2D` from `skiaCanvas2d.ts` and stays
 platform-agnostic — see convention 6.
 
+### Café visits are state (constants/cafeVisit.ts)
+
+Who is in the café lives in `state.cafeVisit`, not in the canvas. The queue
+used to be a `CafeCanvas`-local array rebuilt from nothing on every mount —
+the town map couldn't show anyone waiting, and the same cat could roam the
+streets while standing in line. Presence is now the **authority on where every
+owned cat is**: listed means inside (or walking over), absent means out in the
+town. The café renders this list, the town renders its complement, and neither
+screen invents a cat of its own.
+
+A visit stores exactly two timestamps; every phase is derived from the clock,
+never stored:
+
+```
+sets off ──(WALK_IN_MS 15s)──▶ in line ──served──▶ lingers ──(LINGER_MS 60s)──▶ gone
+`setOffAt`                                `servedAt`
+```
+
+- **Arrivals are settled, not scheduled.** `settleCafeVisit(visit, now,
+  popularity, ownedCats)` is pure and idempotent: it sweeps out finished
+  lingerers, then walks the arrival clock forward one
+  `spawnIntervalMs(popularity)` at a time, admitting a group per tick while
+  there's room. The provider runs it every 5s and on load, so the café fills
+  at the same rate whether or not anyone is watching — and a week away fills
+  at most one caféful (the rewind is capped at `QUEUE_CAPACITY + 1` intervals).
+- **Group members set off `WALK_STAGGER_MS` (3s) apart**, so every derived
+  view is single-file for free: the town badge ticks 1, 2, 3 and the café door
+  admits one cat at a time. A tail member's `setOffAt` legitimately sits a few
+  seconds in the future; `pruneCustomers` allows up to
+  `QUEUE_CAPACITY × WALK_STAGGER_MS`.
+- **Caps.** `QUEUE_CAPACITY = 9` (matches the queue spots) and
+  `maxInside(owned) = min(9, max(1, ceil(owned / 2)))` — half the collection
+  may visit at once, so the town never empties. An unserved customer holds a
+  line spot from the moment it sets off, and the queue **fills and holds**:
+  nobody leaves unserved.
+- **Draws are deterministic** — `roll(arrivalSeq)`, no `Math.random()` —
+  because the settle runs inside a state updater React may invoke twice per
+  commit. Same rule as the gacha (convention 13).
+- `markServed` stamps `servedAt` (reached through the `serveCustomers`
+  action); `pruneCustomers` launders the list on load.
+
+Both screens animate *against* the shared stamps. The town walks the roamer to
+the café door inside the `WALK_IN_MS` window and despawns it when `hasJoined`
+flips; the café spawns the cat through its own door on the same flip, so the
+handoff needs no event. The badge on the town's café building shows
+`countWaiting(visit, now)` — cats who finished the walk and haven't been
+served — and hides at zero.
+
 ### Cat entity (Cat.tsx)
 
 ```typescript
 interface Cat {
-  id: string;
-  catId: string;           // which roster cat this is — drawn from state.ownedCats
+  id: string;              // the CafeCustomer id this entity mirrors
+  catId: string;           // which roster cat this is — from the customer
   groupId: string;
   x: number; y: number;
   targetX: number; targetY: number;
@@ -592,7 +659,6 @@ interface Cat {
   size: number;            // 30 (width = size * 1.8 * scale; height follows the 28×37 grid)
   state: CatState;         // 'walkingToLine' | 'waiting' | 'walkingToSeat' | 'seated' | 'leaving'
   seatIndex: number | null;
-  lineOffsetX: number;
   seatFacing: 'front' | 'left' | 'right' | null;
   seatedAt: number | null; // timestamp when seated
   drink: BobaFlavor | null;// the cup handed over, carried until they leave
@@ -625,9 +691,13 @@ direction)` — it takes no sprite argument. Sprites are **not** square: height 
 `width * catAspectRatio(catId)` off the 28×37 grid, and the shadow ellipse is
 anchored at the feet rather than the centre.
 
-**Who visits:** each spawned cat picks a random id from `state.ownedCats`. A
-player with nothing adopted gets no visitors at all — in practice impossible,
-since the collection is seeded with three starters.
+**Who visits:** whoever `state.cafeVisit` says — the render loop's
+`syncCustomers` mirrors the customer list into cat entities. A customer whose
+`hasJoined` flip is still pending waits in a spawn queue and walks through the
+door the frame it comes due; one whose visit ended (or vanished — a prune, a
+reset) is sent out and despawned. On mount, mid-visit customers are rebuilt
+already in line — a catch-up arrival from while the app was shut snaps
+straight to its spot instead of replaying the walk.
 
 ### Table layout (cafeConfig.ts)
 
@@ -656,20 +726,23 @@ at — when the two drifted apart, every cat sat *beside* its chair.
 
 ### Queue system
 
-Queue spots are vertically spaced at `y = 268 + i*46`, centered at `width/2`.
-Up to 9 queue positions. A cat is ~71 tall, so at the old 36 spacing the line
-stacked into one mound of ears.
+Queue spots are vertically spaced at `y = 268 + i*46`, centered at `width/2` —
+a single-file line, `QUEUE_CAPACITY` (9) positions. A cat is ~71 tall, so at
+the old 36 spacing the line stacked into one mound of ears.
 
 **Cat state machine:** `walkingToLine → waiting → walkingToSeat → seated → leaving`
 
 **Group behaviour:**
-- Cats spawn in groups of 1–3 (based on `maxGroupSize(popularity)`)
-- Groups share a `groupId` and stay together through queue → seating
-- Auto-spawn interval: `spawnIntervalMs(popularity)`, self-rescheduling
+- Group size rolls against `maxGroupSize(popularity)` inside `settleCafeVisit`
+  — the canvas no longer runs a spawn timer of its own
+- Groups share a `groupId` and file in `WALK_STAGGER_MS` apart, single-file
 
 **Seating preferences:**
-- Groups prefer empty tables; solo cats 80% prefer empty, 20% join occupied
-- Cats leave after 60s seated
+- Served one at a time, seated one at a time: 80% of first-seaters want an
+  empty table, the rest join an occupied one — but a cat whose groupmate
+  already holds a chair takes an open seat at *that* table
+- A served cat sits with its drink for `LINGER_MS` (60s); the settle then
+  sweeps the visit and `syncCustomers` sends the cat out
 
 ### Serving is a gesture, not a button
 
@@ -678,10 +751,15 @@ the line. There is no Serve button.
 
 - The cup lives at `CUP_STATION` and is a React `Animated.View` over the canvas
   (`BobaCupSprite` → `gridToSvgUri`), not something the canvas draws
-- Drop test: nearest cat in the front group within `DROP_RADIUS` of the cup's
-  **base** — you set the cup down in front of them
-- Costs 5 pearls per cat in the front group; awards 25 coins per cat + 1 drink
-  served (→ popularity), then sends the group to assigned seats
+- Drop test: the front cat against the cup's vertical centre line (top → base)
+  within `DROP_RADIUS` — any visible cup-over-cat overlap counts. Testing only
+  the cup's base point missed whenever the cup's body covered the cat
+- **One cat per drag.** Costs `PEARLS_PER_CAT` (5); awards 25 coins + 1 drink
+  served (→ popularity), stamps the customer via `serveCustomers([id])`, and
+  sends that cat to a seat. The line steps forward for the next drag
+- The hint pill is honest: "Drag to serve ◆5" when the front cat is servable,
+  "Need ◆5 to serve" when a cat is waiting but pearls are short — a mute
+  refusal reads as broken, not idle
 - Each served cat keeps `drink`, the flavour you actually handed over, and sips
   it down through four fill levels over the minute it sits
 - The cup is **always** draggable. Gating the gesture on "is anyone waiting"
@@ -985,9 +1063,18 @@ for, and a plot is a promise rather than a destination.
 
 ### Wandering cats on the town map (town/roam.ts)
 
-The cast is **exactly `state.ownedCats`**, capped at `MAX_ROAMERS = 16`. There
-is no fixed list and no separate unlock path — a cat you haven't adopted exists
-nowhere in the app.
+The cast is `state.ownedCats` **minus whoever is inside the café**
+(`catsInside(state.cafeVisit, now)`), capped at `MAX_ROAMERS = 16` (the cap
+lives in `TownMap.tsx`). There is no fixed list and no separate unlock path —
+a cat you haven't adopted exists nowhere in the app, and a cat in the café is
+never simultaneously on the streets.
+
+Visits move cats between the two worlds. `syncRoamers` handles state-object
+changes — a visit vanishing mid-walk, a finished visitor respawning at the
+café door — while the frame loop watches the clock: a customer's `setOffAt`
+coming due sends its roamer walking to the café door (`sendRoamerToCafe`), and
+`hasJoined` flipping despawns it, its spot remembered. The café building wears
+a `countWaiting` badge, hidden at zero, so a full line is visible from the map.
 
 Cats don't step randomly. Each picks a destination across town and follows a
 breadth-first route over walkable tiles (`S` stone, `R` road, `o` paved plots),
@@ -1045,8 +1132,8 @@ items, unchanged by the cat removal.
 ### Legacy cat roster (`CATS_DATA`)
 
 7 cats: Luna 🐈‍⬛, Whiskers 🧡, Mittens 🤍, Sage 💚, Jazz 🟠, Shadow ⬛, Sunny 🌟.
-Still exported, tied to the legacy `queue` field. The café canvas draws roster
-cats from `ownedCats` instead and does not read this.
+Still exported, tied to the legacy `queue` field. The café canvas draws its
+visitors from `state.cafeVisit` instead and does not read this.
 
 `state.queue`, `addCatToQueue` and `updateQueueWaitTimes` now have **no callers
 at all** — the last one was the focus timer, which used to push a cat onto the
@@ -1261,7 +1348,8 @@ should generally not be committed with a session-local port.
 - Full café floor rendered through Skia as pixel art in the town's idiom —
   plank floor, woven runner, counter with espresso machine and boba jars,
   windows onto the town, chalk menu board, day/night lighting (2 visual style
-  variants), with cat spawning, queuing, seating and drag-to-serve
+  variants), with cats arriving from the town, queuing single-file, seating
+  and one-drag-one-drink serving
 - Growth Hub with all 8 sections (habits, mission, reflection, focus, calendar,
   todo, resources, achievements)
 - Three-tier habit system with rep logging, streaks, pearl math (budget + per-rep models)
@@ -1278,6 +1366,11 @@ should generally not be committed with a session-local port.
 - Cat Shelter: gacha adoption on a 10 → 100 price ladder that caps at 100, no duplicates, rarity-weighted draw
   (`constants/gacha.ts`), pixel capsule machine, full-screen reveal, 36-cat collection
 - Adopted cats are the only cats in the app — they roam the town and visit the café
+- Café visits as shared state (`constants/cafeVisit.ts`): two timestamps per
+  visit, phases derived from the clock, settled every 5s from the provider —
+  town roamers walk to the door and hand off to the café floor, a waiting
+  badge sits on the town's café building, and no cat exists in both worlds at
+  once
 - Persistent state with migrations (legacy array logs → record-based, old habits → tiered,
   pre-shelter saves → seeded collection)
 - Greenhouse: 12 sockets across 3 benches, 9 species with per-species growth
@@ -1366,27 +1459,33 @@ should generally not be committed with a session-local port.
     adoption draw (`constants/gacha.ts`) takes its rolls as parameters and calls
     no `Math.random()`, because React can invoke an updater more than once per
     commit. Roll outside the updater; re-check preconditions inside it.
-14. **Never hand `drawImage` the fill paint.** Skia ignores a paint's RGB when
-13. **The greenhouse has no render loop, and should not grow one.** Nothing in
+14. **The greenhouse has no render loop, and should not grow one.** Nothing in
     that room moves on its own — plants change once a day, when you water them
     — so the scene is recorded into `SkPicture`s and replayed. The room picture
     is re-recorded only when size, palette or bench count changes; the frame
     picture only when a plant does. Adding a `requestAnimationFrame` there
     would cost a repaint per frame to draw a still life.
-14. **The trough lips are drawn after the plants, not with the bench.**
+15. **The trough lips are drawn after the plants, not with the bench.**
     `drawGreenhouseScene` deliberately omits them and `drawBenchFronts` paints
     them in a later pass, because they have to overlap the pots — that overlap
     is the only reason a plant looks planted rather than placed. Folding them
     back into the bench silently un-sinks every pot.
-15. **The greenhouse's back wall is limewash and its floor is a short strip.**
+16. **The greenhouse's back wall is limewash and its floor is a short strip.**
     It was brick, the full height, and the room collapsed into one warm
     mid-value field with the pots and the benches. Limewash is quiet by
     construction — but a wall alone gives the room no ground, so anything meant
     to be standing on the floor floats. `floorRunY()` is the line where that
     stops, it is anchored to the last bench rather than to the screen bottom,
     and floor-level clutter belongs on it.
-16. **Never hand `drawImage` the fill paint.** Skia ignores a paint's RGB when
+17. **Never hand `drawImage` the fill paint.** Skia ignores a paint's RGB when
     drawing an image but still applies its **alpha**, so sharing `fillPaint`
     painted every sprite at whatever opacity the last `fillStyle` happened to
     carry — a 22% contact shadow set just before a cat left the cat 22% opaque.
     `skiaCanvas2d.ts` keeps a separate `imagePaint` for this reason.
+18. **Cat presence is derived from `cafeVisit`, never invented on a screen.**
+    A visit is two timestamps; walking over / in line / lingering are read off
+    the clock, so the café floor and the town map cannot disagree about where
+    a cat is. Both canvases *mirror* the customer list — anything that changes
+    presence goes through `settleCafeVisit` / `markServed` / `pruneCustomers`
+    in `constants/cafeVisit.ts`, and neither screen spawns, despawns or
+    reassigns a cat on its own authority.

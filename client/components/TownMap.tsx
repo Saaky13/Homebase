@@ -13,13 +13,22 @@ import {
 import {
   DAY_PALETTE, DAY_ROOFS, isNightAt, nightPalette, nightRoofs,
 } from '../town/palette';
-import { createRoamers, stepRoamers, type Roamer } from '../town/roam';
+import {
+  cafeDoorTile, createRoamer, rememberRoamers, rememberSpot, sendRoamerToCafe,
+  stepRoamers, type Roamer,
+} from '../town/roam';
+import {
+  catsEnRoute, catsInside, countWaiting, hasJoined, type CafeVisitState,
+} from '../constants/cafeVisit';
 import { useCafeState } from '../hooks/useCafeState';
 import { getCat, getMiniCatGrid } from '../constants/catSprites';
 import CatInspectCard, { CARD_H_ESTIMATE, anchorCard } from './CatInspectCard';
 
 /** Keeps the town lively without turning the paths into a parade. */
 const MAX_ROAMERS = 16;
+
+/** The café's footprint, for hanging the waiting-customer indicator off. */
+const CAFE_SPEC = BUILDINGS.find((b) => b.id === 'cafe') ?? null;
 
 /**
  * Tap target around the fountain — the Growth Hub entrance.
@@ -72,7 +81,7 @@ export default function TownMap({ night }: { night?: boolean }) {
   const router = useRouter();
   const { width } = useWindowDimensions();
 
-  const { state } = useCafeState();
+  const { state, isLoading } = useCafeState();
 
   const isNight = night ?? isNightAt();
   // The grid comes from stable noise, so it only needs building once.
@@ -83,6 +92,32 @@ export default function TownMap({ night }: { night?: boolean }) {
   // restarts only when the cast actually changes, not on every state write.
   const catKey = state.ownedCats.slice(0, MAX_ROAMERS).join(',');
   const catIds = useMemo(() => (catKey ? catKey.split(',') : []), [catKey]);
+
+  /**
+   * The café roster, read through a ref by the render loop rather than as an
+   * effect dependency: a cat walking in the door is a routine event, and
+   * restarting the effect would rebuild every roamer and send the whole cast
+   * back to its spawn tile each time one did.
+   */
+  const visitRef = useRef(state.cafeVisit);
+  visitRef.current = state.cafeVisit;
+
+  const catIdsRef = useRef(catIds);
+  catIdsRef.current = catIds;
+
+  /**
+   * What the café-door indicator counts: cats standing in line, not seated
+   * ones. State rather than a memo, because a cat *joins* the line by a
+   * timestamp going stale — no state changes at that moment — so the render
+   * loop samples `countWaiting` each frame and pushes the number here when it
+   * moves. The effect covers the other direction (serving, going home), which
+   * does change state, and keeps the badge honest even when the tab is
+   * backgrounded and frames stop.
+   */
+  const [waiting, setWaiting] = useState(0);
+  useEffect(() => {
+    setWaiting(countWaiting(state.cafeVisit, Date.now()));
+  }, [state.cafeVisit]);
 
   // The map is 384px wide; narrower phones scale it down rather than clip.
   const scale = Math.min(1, width / MAP_PX_W);
@@ -153,20 +188,126 @@ export default function TownMap({ night }: { night?: boolean }) {
       return;
     }
 
+    // Before the save loads, `cafeVisit` is the empty default and every cat
+    // looks like it's out here — including whoever has been standing in line
+    // since yesterday. Paint the town and wait: the effect re-runs on load
+    // with a cast that is right from the first frame, instead of spawning
+    // cats it then has to march back through the café door.
+    if (isLoading) {
+      ctx.clearRect(0, 0, MAP_PX_W, MAP_PX_H);
+      ctx.drawImage(base, 0, 0);
+      roamersRef.current = [];
+      return;
+    }
+
     const painter = createCanvasPainter(ctx);
-    const roamers = createRoamers(grid, catIds, performance.now());
+    const door = cafeDoorTile(grid);
+
+    // Whoever is *inside* the café doesn't start out here — a cat already in
+    // line stays absent rather than walking in a second time. A cat still on
+    // its way over does spawn (wherever it last stood, thanks to the position
+    // memory); the frame loop's clock watch sends it back on its way on the
+    // first frame, so opening the map mid-journey catches it on the street
+    // instead of losing the trip.
+    const bootClock = Date.now();
+    const inside = catsInside(visitRef.current, bootClock);
+    const roamers: Roamer[] = [];
+    catIds.forEach((id) => {
+      if (inside.has(id)) return;
+      const born = createRoamer(grid, id, performance.now());
+      if (born) roamers.push(born);
+    });
     roamersRef.current = roamers;
+
+    /**
+     * The visit state the cast was last reconciled against.
+     *
+     * `settleCafeVisit` and friends return the same object when nothing
+     * changed, so a new identity means the roster actually moved — an identity
+     * check skips the diff entirely on the frames in between, which is nearly
+     * all of them.
+     */
+    let syncedTo: CafeVisitState = visitRef.current;
+
+    const syncRoamers = (now: number) => {
+      const visit = visitRef.current;
+      if (visit === syncedTo) return;
+      syncedTo = visit;
+
+      const clock = Date.now();
+      const inCafe = catsInside(visit, clock);
+      const walking = catsEnRoute(visit, clock);
+
+      // Setting off is the frame loop's job — a departure is a timestamp
+      // coming due, not a state change, and staggered groupmates come due
+      // one at a time. All this pass handles is a visit *vanishing* while
+      // its cat was still walking over (a prune, a reset): finish the
+      // roamer and let the re-spawn below put it back on the map.
+      roamers.forEach((r) => {
+        if (r.leaving && !inCafe.has(r.catId) && !walking.has(r.catId)) r.done = true;
+      });
+
+      // Done cats are dropped here as well as in the frame loop so the
+      // membership check below sees an accurate cast.
+      for (let i = roamers.length - 1; i >= 0; i--) {
+        if (roamers[i].done) roamers.splice(i, 1);
+      }
+
+      // Finished their drink and gone home. They come back out of the café's
+      // own door rather than reappearing wherever they were standing when
+      // they went in.
+      const onMap = new Set(roamers.map((r) => r.catId));
+      catIdsRef.current.forEach((id) => {
+        if (inCafe.has(id) || walking.has(id) || onMap.has(id)) return;
+        const born = createRoamer(grid, id, now, door ?? undefined);
+        if (born) roamers.push(born);
+      });
+    };
 
     let raf = 0;
     let last = performance.now();
 
     const frame = (now: number) => {
+      syncRoamers(now);
       stepRoamers(roamers, grid, now - last, now);
       last = now;
+
+      // A visit's two in-between moments — a cat's turn to set off, and its
+      // walk window closing — are timestamps coming due, not state changes,
+      // so the frame loop is what watches for them. Due to set off: head for
+      // the door (staggered groupmates leave one at a time — see
+      // WALK_STAGGER_MS). Window closed on a cat still short of the door:
+      // it's in line now (the café is drawing it), so it can't also be out
+      // here — it slips inside from where it stands, and its spot is
+      // remembered like any other despawn.
+      const clock = Date.now();
+      for (const r of roamers) {
+        if (r.done) continue;
+        const c = visitRef.current.customers.find((v) => v.catId === r.catId);
+        if (!c) continue;
+        if (hasJoined(c, clock)) {
+          rememberSpot(r.catId, r.tx, r.ty);
+          r.done = true;
+        } else if (c.setOffAt <= clock && !r.leaving) {
+          sendRoamerToCafe(r, grid);
+        }
+      }
+
+      // A cat that has reached the café door is inside now. Removing it here
+      // rather than at sync time is what makes the walk-in read as a walk-in.
+      for (let i = roamers.length - 1; i >= 0; i--) {
+        if (roamers[i].done) roamers.splice(i, 1);
+      }
 
       ctx.clearRect(0, 0, MAP_PX_W, MAP_PX_H);
       ctx.drawImage(base as HTMLCanvasElement, 0, 0);
       drawRoamers(painter, roamers, isNight);
+
+      // Joining the line is a timestamp going stale, not a state write, so the
+      // badge is sampled here. The equality guard keeps the setState free on
+      // the frames where nothing moved — which is nearly all of them.
+      const inLine = countWaiting(visitRef.current, clock);
+      setWaiting((prev) => (prev === inLine ? prev : inLine));
 
       // Walk the card along with the cat it belongs to. Written straight to
       // the Animated values so a cat crossing town costs no re-renders.
@@ -193,8 +334,13 @@ export default function TownMap({ night }: { night?: boolean }) {
     };
 
     raf = requestAnimationFrame(frame);
-    return () => cancelAnimationFrame(raf);
-  }, [grid, isNight, catIds]);
+    return () => {
+      cancelAnimationFrame(raf);
+      // The town looks how you left it: snapshot everyone's position so the
+      // next mount resumes the cast in place instead of rescattering it.
+      rememberRoamers(roamersRef.current);
+    };
+  }, [grid, isNight, catIds, isLoading]);
 
   /** How close a tap has to land to a roaming cat's sprite box, in design pixels. */
   const INSPECT_PAD = 6;
@@ -363,6 +509,26 @@ export default function TownMap({ night }: { night?: boolean }) {
             true
           )}
 
+          {/* Someone is in line. Pinned to the café's own roofline rather than
+              shown as a global counter, because the point of it is to tell you
+              *which* door to go to — and it disappears the moment the last cat
+              is served, so an empty café never wears a badge. */}
+          {CAFE_SPEC && waiting > 0 && (
+            <View
+              pointerEvents="none"
+              style={[
+                styles.queueBadge,
+                isNight ? styles.queueBadgeNight : styles.queueBadgeDay,
+                {
+                  left: ((CAFE_SPEC.tx + CAFE_SPEC.tw) * TILE - 12) * scale,
+                  top: (CAFE_SPEC.ty * TILE - 6) * scale,
+                },
+              ]}
+            >
+              <Text style={styles.queueBadgeText}>{waiting}</Text>
+            </View>
+          )}
+
           {/* Last in the box so it sits over the buildings, and inside it so
               it scrolls with the cat rather than hanging in the viewport. */}
           {inspectedCat && (
@@ -411,4 +577,24 @@ const styles = StyleSheet.create({
   labelTextNight: { fontSize: 8, color: 'rgba(226,220,238,0.92)' },
   hubLabel: { paddingHorizontal: 7, paddingVertical: 2 },
   hubLabelText: { fontSize: 9 },
+
+  /**
+   * Sized in screen pixels, not map pixels: it's a piece of UI hung on the
+   * town, not part of the art, and at map scale on a narrow phone the number
+   * would be three pixels tall.
+   */
+  queueBadge: {
+    position: 'absolute',
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    paddingHorizontal: 4,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: '#FFF7F2',
+  },
+  queueBadgeDay: { backgroundColor: '#E88973' },
+  queueBadgeNight: { backgroundColor: '#D87E97' },
+  queueBadgeText: { fontSize: 10, fontWeight: '800', color: '#FFF9F0' },
 });

@@ -26,7 +26,6 @@ export interface Cat {
   size: number;
   state: CatState;
   seatIndex: number | null;
-  lineOffsetX: number;
   seatFacing: SeatFacing;
   seatedAt: number | null;
   /** The cup handed over at the counter, carried until they leave. */
@@ -54,16 +53,15 @@ export function createCat(
   groupId: string,
   startX: number,
   startY: number,
-  queueSpot: QueueSpot,
-  lineOffsetX: number = 0
+  queueSpot: QueueSpot
 ): Cat {
   return {
     id,
     catId,
     groupId,
-    x: startX + lineOffsetX,
+    x: startX,
     y: startY,
-    targetX: queueSpot.x + lineOffsetX,
+    targetX: queueSpot.x,
     targetY: queueSpot.y,
     speed: 3,
     // Drawn at size * 1.8, so 30 puts a cat at ~54px on a 390px-wide floor —
@@ -73,7 +71,6 @@ export function createCat(
     size: 30,
     state: 'walkingToLine',
     seatIndex: null,
-    lineOffsetX,
     seatFacing: null,
     seatedAt: null,
     drink: null,
@@ -130,7 +127,7 @@ export function updateCat(cat: Cat) {
 }
 
 export function retargetCat(cat: Cat, queueSpot: QueueSpot) {
-  cat.targetX = queueSpot.x + cat.lineOffsetX;
+  cat.targetX = queueSpot.x;
   cat.targetY = queueSpot.y;
   cat.state = 'walkingToLine';
 }

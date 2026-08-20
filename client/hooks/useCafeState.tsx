@@ -32,6 +32,13 @@ import {
 } from '../constants/gacha';
 import { DRINKS, STARTER_RECIPES, type DrinkId } from '../constants/drinks';
 import {
+  emptyCafeVisit,
+  markServed,
+  pruneCustomers,
+  settleCafeVisit,
+  type CafeVisitState,
+} from '../constants/cafeVisit';
+import {
   backfillCatStats,
   dayPartAt,
   emptyCatStat,
@@ -235,6 +242,15 @@ export interface CafeState {
    */
   ownedCats: string[];
   /**
+   * Who is in the café, and when the door last opened.
+   *
+   * This is the authority on where every owned cat is: listed here means
+   * inside the café, absent means out in the town. The two screens read
+   * opposite halves of it, which is what stops the same cat being seen in
+   * both places at once.
+   */
+  cafeVisit: CafeVisitState;
+  /**
    * What the almanac remembers about each owned cat: when it arrived, and a
    * four-slot tally of when you've served it. Keyed by cat id and kept in step
    * with `ownedCats` by `backfillCatStats` on load, so no owned cat can lack a
@@ -349,6 +365,7 @@ const initialState: CafeState = {
   focusTimer: idleFocusTimer(),
   claimedAchievements: [],
   ownedCats: [...STARTER_CATS],
+  cafeVisit: emptyCafeVisit(),
   catStats: backfillCatStats(undefined, STARTER_CATS),
   recipes: [...STARTER_RECIPES],
   revealActive: false,
@@ -544,6 +561,28 @@ function settleGreenhouse(state: CafeState, todayKey: string): CafeState {
 }
 
 /**
+ * Brings the café up to date with the wall clock: cats that finished their
+ * drink go home, and the door opens for however many arrivals the elapsed time
+ * bought.
+ *
+ * Measured in milliseconds rather than in date keys, unlike the two settles
+ * above — the café fills on the spawn interval, which is minutes, not days.
+ * Same contract otherwise: pure, idempotent within a tick, and safe to run
+ * from whichever screen happens to be open.
+ */
+function settleVisit(state: CafeState, now: number): CafeState {
+  const visit = settleCafeVisit(
+    state.cafeVisit,
+    now,
+    state.popularity,
+    state.ownedCats
+  );
+  // Identity is the signal that nothing happened — returning a new state object
+  // here would re-render both canvases on every five-second tick.
+  return visit === state.cafeVisit ? state : { ...state, cafeVisit: visit };
+}
+
+/**
  * Whether today counts for the bloom bonus — the mechanic that is the whole
  * thesis of the app in one line: the garden pays more on days you did the
  * actual work.
@@ -657,6 +696,12 @@ type CafeContextType = {
   claimAchievement: (achievementId: string, pearlReward: number) => boolean;
   pullPrize: () => PullResult;
   recordCatsServed: (catIds: string[]) => void;
+  // Lets cats in and sends finished ones home. Driven by a tick in the
+  // provider, so both canvases can just render whatever it produced.
+  settleCafeVisitNow: () => void;
+  // Hands a group their cups: they stop queueing, sit, and stay counted as
+  // being in the café until they've drunk it and left.
+  serveCustomers: (customerIds: string[]) => void;
   setRevealActive: (active: boolean) => void;
   buySeed: (speciesId: string) => boolean;
   plantSeed: (speciesId: string, slot: number) => PlantResult;
@@ -774,6 +819,16 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
                 ...(parsed.greenhouse?.seeds ?? {}),
               },
             },
+            // Saves from before the café tracked its own room open empty and
+            // fill on the first settle below. The nested spread is what keeps a
+            // partial object from a rollback from arriving without `customers`.
+            cafeVisit: {
+              ...emptyCafeVisit(),
+              ...(parsed.cafeVisit ?? {}),
+              customers: Array.isArray(parsed.cafeVisit?.customers)
+                ? parsed.cafeVisit.customers
+                : [],
+            },
             // never resume a "session in progress" flag across app restarts
             focusSessionActive: false,
             revealActive: false,
@@ -806,6 +861,15 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
         // picture. Every gain path settles again before it writes.
         const grown = settleGreenhouse(settled, todayKey);
 
+        // Fill the café for the time spent away, so opening it shows cats
+        // already in line rather than an empty room that starts filling from
+        // the moment you look at it. Popularity is read *after* its own settle,
+        // since a neglected café should let people in more slowly.
+        const opened = settleVisit(
+          { ...grown, cafeVisit: pruneCustomers(grown.cafeVisit, grown.ownedCats, Date.now()) },
+          Date.now()
+        );
+
         // Spend the one-time moments this save already satisfies, once, without
         // showing them. `lastAcknowledgedLevel` is the same idea for the one
         // moment that repeats: a save that reached level 4 before the beat
@@ -814,21 +878,21 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
         // A first launch has no history to catch up on, so it only flips the
         // flag — running the backfill there would be harmless today but would
         // silently eat any future moment that happens to be true at zero.
-        const caughtUpGuide = grown.guide.caughtUp
-          ? grown.guide
+        const caughtUpGuide = opened.guide.caughtUp
+          ? opened.guide
           : saved
           ? {
-              ...grown.guide,
+              ...opened.guide,
               caughtUp: true,
-              lastAcknowledgedLevel: Math.max(grown.guide.lastAcknowledgedLevel, grown.level),
+              lastAcknowledgedLevel: Math.max(opened.guide.lastAcknowledgedLevel, opened.level),
               seenMessageIds: Array.from(
-                new Set([...grown.guide.seenMessageIds, ...catchUpSeenIds(grown)])
+                new Set([...opened.guide.seenMessageIds, ...catchUpSeenIds(opened)])
               ),
             }
-          : { ...grown.guide, caughtUp: true };
+          : { ...opened.guide, caughtUp: true };
 
         const next = {
-          ...grown,
+          ...opened,
           guide: { ...caughtUpGuide, lastOpenedDate: todayKey },
         };
 
@@ -1767,6 +1831,37 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
     [commit]
   );
 
+  /* ------------------------------- the café ------------------------------ */
+
+  const settleCafeVisitNow = useCallback(() => {
+    commit((prev) => settleVisit(prev, Date.now()));
+  }, [commit]);
+
+  /**
+   * The café runs on a clock whichever screen you're on: the town map needs it
+   * so the door indicator is honest and so cats leave for the café while you
+   * watch, and the café screen needs it so the line grows while you stand
+   * there. `settleVisit` returns `prev` untouched when nothing happened, so a
+   * quiet tick costs one comparison and no render.
+   */
+  useEffect(() => {
+    if (isLoading) return;
+    const id = setInterval(settleCafeVisitNow, 5000);
+    return () => clearInterval(id);
+  }, [isLoading, settleCafeVisitNow]);
+
+  const serveCustomers = useCallback(
+    (customerIds: string[]) => {
+      if (!customerIds.length) return;
+      const now = Date.now();
+      commit((prev) => {
+        const visit = markServed(prev.cafeVisit, customerIds, now);
+        return visit === prev.cafeVisit ? prev : { ...prev, cafeVisit: visit };
+      });
+    },
+    [commit]
+  );
+
   /* ---------------------------- the greenhouse --------------------------- */
 
   const buySeed = useCallback(
@@ -2035,6 +2130,8 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
         claimAchievement,
         pullPrize,
         recordCatsServed,
+        settleCafeVisitNow,
+        serveCustomers,
         setRevealActive,
         buySeed,
         plantSeed,

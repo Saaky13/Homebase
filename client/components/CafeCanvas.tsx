@@ -37,7 +37,7 @@ import {
 } from './cafeRender';
 import { snap } from './cafePixel';
 import { cafePaletteFor, isNightAt } from '../constants/cafePalette';
-import { spawnIntervalMs, maxGroupSize } from '../constants/popularity';
+import { hasJoined, type CafeCustomer } from '../constants/cafeVisit';
 import BobaCupSprite, { CUP_ASPECT } from './BobaCupSprite';
 import type { BobaFlavor } from '../constants/bobaCup';
 import { PearlIcon } from './Icons';
@@ -87,12 +87,11 @@ function isInspectable(cat: Cat) {
 export default function CafeCanvas() {
   const catsRef = useRef<Cat[]>([]);
   const animationFrameRef = useRef<number | null>(null);
-  const autoSpawnTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Mirrored into a ref so spawning tracks the collection without re-running
-  // the main effect, which would tear down the canvas and the render loop.
-  const ownedCatsRef = useRef<string[]>([]);
+  // Who the café state says is in the room. The render loop reconciles the
+  // floor against this every frame; it never decides for itself who shows up.
+  // A ref rather than a dep so an arrival doesn't tear down the render loop.
+  const customersRef = useRef<CafeCustomer[]>([]);
   const pearlsRef = useRef(0);
-  const popularityRef = useRef(0);
   // Read by the serve, which runs from a gesture handler rather than a render.
   const flavorRef = useRef<BobaFlavor>('classic');
   // The cat the cup is currently hovering, read by the render loop to draw the
@@ -113,7 +112,7 @@ export default function CafeCanvas() {
     };
   });
   const [canServe, setCanServe] = useState(false);
-  const [serveCost, setServeCost] = useState(0);
+  const [needPearls, setNeedPearls] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [night, setNight] = useState(() => isNightAt());
 
@@ -139,8 +138,15 @@ export default function CafeCanvas() {
   const cardHRef = useRef(CARD_H_ESTIMATE);
   const cardFlip = useRef(new Animated.Value(0)).current;
 
-  const { state, addCoins, spendPearls, addDrinkServed, recordCatsServed } =
-    useCafeState();
+  const {
+    state,
+    addCoins,
+    spendPearls,
+    addDrinkServed,
+    recordCatsServed,
+    serveCustomers,
+    settleCafeVisitNow,
+  } = useCafeState();
 
   const scale = Math.min(layout.width / DESIGN_WIDTH, MAX_SCALE);
   // Snapped to the art grid so the floorboard courses don't land on half pixels.
@@ -173,14 +179,15 @@ export default function CafeCanvas() {
   }, [state.pearls]);
 
   useEffect(() => {
-    ownedCatsRef.current = state.ownedCats;
-  }, [state.ownedCats]);
+    customersRef.current = state.cafeVisit.customers;
+  }, [state.cafeVisit.customers]);
 
-  // Held in a ref so spawn pacing tracks popularity without re-running the
-  // main effect, which would tear down the canvas listeners and render loop.
+  // The provider's five-second tick already advances the café, but walking in
+  // the door should not mean waiting up to five seconds to see whether anyone
+  // is here — settle once on arrival so the room is current on the first frame.
   useEffect(() => {
-    popularityRef.current = state.popularity;
-  }, [state.popularity]);
+    settleCafeVisitNow();
+  }, [settleCafeVisitNow]);
 
   // The room lights itself at dusk. Checked on a timer rather than derived at
   // render time, so a café left open crosses over without a reload.
@@ -198,11 +205,8 @@ export default function CafeCanvas() {
       (cat) => cat.state === 'walkingToLine' || cat.state === 'waiting'
     );
 
-  const getFrontGroupInQueue = () => {
-    const queueCats = getQueueCats();
-    if (!queueCats.length) return [];
-    return queueCats.filter((cat) => cat.groupId === queueCats[0].groupId);
-  };
+  /** The one cat at the head of the line — the only one a cup can go to. */
+  const getFrontCatInQueue = (): Cat | null => getQueueCats()[0] ?? null;
 
   const getTables = (): Table[] => {
     const seats = getSeatSpots();
@@ -247,30 +251,26 @@ export default function CafeCanvas() {
     return copy;
   }
 
-  const findSeatIndexesForGroup = (groupSize: number): number[] | null => {
+  /**
+   * A chair for one cat.
+   *
+   * Cats are served one at a time, so they're seated one at a time — most
+   * would rather have a table to themselves, and the rest join one that's
+   * already occupied.
+   */
+  const findOpenSeatIndex = (): number | null => {
     const tables = shuffleArray(getTables());
 
-    if (groupSize > 1) {
-      const emptyTable = tables.find((table) => {
-        const catsAtTable = getCatsAtTable(table).length;
-        const openSeats = getOpenSeatIndexesForTable(table).length;
-        return catsAtTable === 0 && openSeats >= groupSize;
-      });
+    const wantsOwnTable = Math.random() < 0.8;
 
-      if (!emptyTable) return null;
-      return shuffleArray(getOpenSeatIndexesForTable(emptyTable)).slice(0, groupSize);
-    }
-
-    const soloWantsOwnTable = Math.random() < 0.8;
-
-    if (soloWantsOwnTable) {
+    if (wantsOwnTable) {
       const emptyTable = tables.find((table) => {
         const catsAtTable = getCatsAtTable(table).length;
         return catsAtTable === 0 && getOpenSeatIndexesForTable(table).length >= 1;
       });
 
       if (emptyTable) {
-        return [shuffleArray(getOpenSeatIndexesForTable(emptyTable))[0]];
+        return shuffleArray(getOpenSeatIndexesForTable(emptyTable))[0];
       }
     }
 
@@ -281,7 +281,7 @@ export default function CafeCanvas() {
     });
 
     if (openTable) {
-      return [shuffleArray(getOpenSeatIndexesForTable(openTable))[0]];
+      return shuffleArray(getOpenSeatIndexesForTable(openTable))[0];
     }
 
     const fallbackEmpty = tables.find(
@@ -289,85 +289,93 @@ export default function CafeCanvas() {
     );
 
     if (!fallbackEmpty) return null;
-    return [shuffleArray(getOpenSeatIndexesForTable(fallbackEmpty))[0]];
+    return shuffleArray(getOpenSeatIndexesForTable(fallbackEmpty))[0];
   };
 
-  const canServeFrontGroup = () => {
-    const front = getFrontGroupInQueue();
-    if (!front.length) return false;
+  /**
+   * Where this particular cat sits.
+   *
+   * Cats that walked in together sit together: if a groupmate already has a
+   * chair, this one takes an open seat at that table. Serving one drink at a
+   * time means a party is seated a cat at a time too, so the table is the only
+   * thing left holding them together — without this they'd scatter across the
+   * room the moment the group stopped being served as a unit.
+   *
+   * A groupmate at a table with no free chair falls through to the normal
+   * search rather than blocking: better a cat sits somewhere than holds up a
+   * line that can never move.
+   */
+  const findSeatIndexForCat = (cat: Cat): number | null => {
+    const mate = catsRef.current.find(
+      (other) =>
+        other !== cat && other.groupId === cat.groupId && other.seatIndex !== null
+    );
 
-    const pearlCost = front.length * PEARLS_PER_CAT;
-    if (pearlsRef.current < pearlCost) return false;
+    if (mate) {
+      const table = getTables().find((t) =>
+        t.seatIndexes.includes(mate.seatIndex as number)
+      );
+      const open = table ? getOpenSeatIndexesForTable(table) : [];
+      if (open.length) return shuffleArray(open)[0];
+    }
 
-    const seats = findSeatIndexesForGroup(front.length);
-    return !!seats && seats.length >= front.length;
+    return findOpenSeatIndex();
   };
 
-  const serveFrontGroup = () => {
-    const front = getFrontGroupInQueue();
-    if (!front.length) return false;
+  const canServeFrontCat = () => {
+    const front = getFrontCatInQueue();
+    if (!front) return false;
+    if (pearlsRef.current < PEARLS_PER_CAT) return false;
+    return findSeatIndexForCat(front) !== null;
+  };
 
-    const seats = findSeatIndexesForGroup(front.length);
-    if (!seats || seats.length < front.length) return false;
+  const serveFrontCat = () => {
+    const front = getFrontCatInQueue();
+    if (!front) return false;
 
-    const pearlCost = front.length * PEARLS_PER_CAT;
-    if (pearlsRef.current < pearlCost) return false;
+    const seatIndex = findSeatIndexForCat(front);
+    if (seatIndex === null) return false;
 
-    const paid = spendPearls(pearlCost);
-    if (!paid) return false;
+    const seat = getSeatSpots()[seatIndex];
+    if (!seat) return false;
 
-    pearlsRef.current -= pearlCost;
+    if (pearlsRef.current < PEARLS_PER_CAT) return false;
+    if (!spendPearls(PEARLS_PER_CAT)) return false;
 
-    const allSeats = getSeatSpots();
+    pearlsRef.current -= PEARLS_PER_CAT;
 
-    const servedIds: string[] = [];
-
-    front.forEach((cat, index) => {
-      const seatIndex = seats[index];
-      const seat = allSeats[seatIndex];
-      if (!seat) return;
-
-      sendCatToSeat(cat, seat, seatIndex);
-      // They carry off the cup you actually handed them, not a generic one.
-      cat.drink = flavorRef.current;
-      addCoins(25);
-      addDrinkServed(1);
-      servedIds.push(cat.catId);
-    });
-
-    // One commit for the whole group — see recordCatsServed. Only the cats
-    // that actually got a seat are counted, which is why this collects inside
-    // the loop rather than mapping `front` up front.
-    recordCatsServed(servedIds);
+    sendCatToSeat(front, seat, seatIndex);
+    // They carry off the cup you actually handed them, not a generic one.
+    front.drink = flavorRef.current;
+    addCoins(25);
+    addDrinkServed(1);
+    recordCatsServed([front.catId]);
+    // They stop being *queued* here but stay in the café: a served cat sits
+    // with its cup for a minute, and it must not turn up out in the town while
+    // it's still visibly at a table.
+    serveCustomers([front.id]);
 
     return true;
   };
 
+  /**
+   * One cat per row — a queue is single file.
+   *
+   * Cats that arrive together are still a party: they're served in one gesture
+   * and seated at one table. They just don't stand three abreast to wait. A cat
+   * is ~54px wide on a 390px floor, so a group of three spanned the aisle and
+   * read as a crowd milling at the counter rather than a line with a front of it.
+   *
+   * There are exactly as many spots as `QUEUE_CAPACITY` allows customers, so
+   * the `min` only ever guards against the two drifting apart.
+   */
   const updateQueueTargets = (width: number) => {
-    const queueCats = getQueueCats();
     const queueSpots = getQueueSpots(width);
 
-    let rowIndex = 0;
-    let i = 0;
-
-    while (i < queueCats.length && rowIndex < queueSpots.length) {
-      const currentGroupId = queueCats[i].groupId;
-      const groupCats = queueCats.filter((cat) => cat.groupId === currentGroupId);
-
-      const firstIndex = queueCats.findIndex((cat) => cat.groupId === currentGroupId);
-      if (firstIndex !== i) {
-        i++;
-        continue;
-      }
-
-      const queueSpot = queueSpots[rowIndex];
-      if (!queueSpot) break;
-
-      groupCats.forEach((cat) => retargetCat(cat, queueSpot));
-
-      i += groupCats.length;
-      rowIndex += 1;
-    }
+    getQueueCats().forEach((cat, i) => {
+      const spot = queueSpots[Math.min(i, queueSpots.length - 1)];
+      if (spot) retargetCat(cat, spot);
+    });
   };
 
   /* ------------------------------- scene ------------------------------- */
@@ -416,63 +424,109 @@ export default function CafeCanvas() {
   useEffect(() => {
     const width = DESIGN_WIDTH;
 
-    const spawnGroup = () => {
-      const height = designHeightRef.current;
-      const queueCats = getQueueCats();
+    /**
+     * Brings the floor in line with the café's customer list.
+     *
+     * The list is the authority on who is here — it survives leaving the
+     * screen, and the town map renders its complement so a cat can't be in both
+     * places. This only decides where they stand.
+     */
+    // The list the floor was last reconciled against. It's a fresh array only
+    // when the café state actually moved, so an identity check keeps this off
+    // the other fifty-nine frames a second.
+    let syncedTo: CafeCustomer[] | null = null;
+
+    /**
+     * Customers still walking over from the town, oldest first.
+     *
+     * The floor doesn't draw them yet — out the window they're a roamer
+     * crossing the map. Each frame checks the head of this list, and the
+     * moment a walk window closes the cat comes through the door for real.
+     * That crossing is the *only* walk-in there is: anyone `syncCustomers`
+     * first sees already in line was here before you were, and snaps.
+     */
+    let pending: CafeCustomer[] = [];
+
+    /** Puts one customer on the floor — through the door, or already in place. */
+    const spawnCustomer = (customer: CafeCustomer, height: number, walkIn: boolean) => {
+      // Any spot will do — `updateQueueTargets` re-assigns the whole line
+      // every frame anyway, and a new arrival is at the back by definition.
       const queueSpots = getQueueSpots(width);
+      const spot = queueSpots[Math.min(getQueueCats().length, queueSpots.length - 1)];
+      if (!spot) return;
 
-      // Busier cafés draw bigger groups, not just more of them.
-      const sizeCap = maxGroupSize(popularityRef.current);
-      const requestedGroupSize = 1 + Math.floor(Math.random() * sizeCap);
-      const availableQueueSlots = queueSpots.length - queueCats.length;
-      const actualGroupSize = Math.min(requestedGroupSize, availableQueueSlots);
-      if (actualGroupSize <= 0) return;
+      // Born just below the bottom edge — the same doorway `sendCatOut` leaves
+      // through — so a walk-in enters the room rather than materialising on
+      // the floor.
+      const cat = createCat(
+        customer.id,
+        customer.catId,
+        customer.groupId,
+        width / 2,
+        height + 60,
+        spot
+      );
+      catsRef.current.push(cat);
 
-      // Never empty in practice — the collection is seeded with three starters
-      // — but with nobody adopted there is simply nobody to visit.
-      if (ownedCatsRef.current.length === 0) return;
+      // Already in line before you opened the door. Walking them in would
+      // replay an arrival that happened while you were somewhere else.
+      if (!walkIn) {
+        cat.x = cat.targetX;
+        cat.y = cat.targetY;
+      }
 
-      const groupId = `group-${Date.now()}-${Math.random()}`;
-      const offsets =
-        actualGroupSize === 1 ? [0] : actualGroupSize === 2 ? [-22, 22] : [-28, 0, 28];
-
-      for (let i = 0; i < actualGroupSize; i++) {
-        const queueSpot = queueSpots[queueCats.length + i];
-        if (!queueSpot) break;
-
-        // Visitors are drawn from the cats you've actually adopted, so the
-        // café fills up with your own collection rather than stock sprites.
-        const roster = ownedCatsRef.current;
-        const catId = roster[Math.floor(Math.random() * roster.length)];
-
-        catsRef.current.push(
-          createCat(
-            `${groupId}-cat-${i}`,
-            catId,
-            groupId,
-            width / 2,
-            height - 60,
-            queueSpot,
-            offsets[i]
-          )
-        );
+      // Served before you got here — you handed them a cup, left the screen,
+      // and came back inside the minute. They should be at a table, not
+      // queueing for a drink they already have.
+      if (customer.servedAt !== null) {
+        // Through `findSeatIndexForCat`, so a party you served before leaving
+        // comes back sat at one table rather than scattered.
+        const seatIndex = findSeatIndexForCat(cat);
+        const seat = seatIndex === null ? null : getSeatSpots()[seatIndex];
+        if (seat && seatIndex !== null) {
+          sendCatToSeat(cat, seat, seatIndex);
+          cat.drink = flavorRef.current;
+          // They're mid-drink, not fresh from the counter — the cup should
+          // pick up where it left off rather than refilling itself.
+          cat.seatedAt = customer.servedAt;
+          // Straight into the chair: they were already sitting in it.
+          cat.x = cat.targetX;
+          cat.y = cat.targetY;
+          cat.scale = cat.targetScale;
+        }
       }
     };
 
-    // Self-rescheduling rather than a fixed interval, so each wait is computed
-    // from *current* popularity: a thriving café fills up fast, a neglected one
-    // slows to a trickle — but never to nothing, so there is always something
-    // to come back to.
-    const scheduleNextSpawn = (delay = spawnIntervalMs(popularityRef.current)) => {
-      autoSpawnTimeoutRef.current = setTimeout(() => {
-        spawnGroup();
-        scheduleNextSpawn();
-      }, delay);
-    };
+    const syncCustomers = (height: number) => {
+      const customers = customersRef.current;
+      if (customers === syncedTo) return;
+      syncedTo = customers;
 
-    // Walking into an empty café and waiting three minutes for the first cat is
-    // a bad first second, so the door opens shortly after you arrive.
-    scheduleNextSpawn(catsRef.current.length ? undefined : 1200);
+      const now = Date.now();
+      const live = new Set(customers.map((c) => c.id));
+
+      // Off the list means the drink is finished and they've gone home. They
+      // still walk out rather than blinking away — `isCatOffscreen` collects
+      // them below once they're through the door.
+      catsRef.current.forEach((cat) => {
+        if (cat.state !== 'leaving' && !live.has(cat.id)) {
+          sendCatOut(cat, width / 2, height + 110);
+        }
+      });
+
+      const onFloor = new Set(catsRef.current.map((cat) => cat.id));
+
+      // Rebuilt whole each sync: it's tiny, and the alternative is diffing it.
+      pending = [];
+      customers.forEach((customer) => {
+        if (onFloor.has(customer.id)) return;
+        if (customer.servedAt === null && !hasJoined(customer, now)) {
+          pending.push(customer);
+          return;
+        }
+        spawnCustomer(customer, height, false);
+      });
+    };
 
     const render = () => {
       const height = designHeightRef.current;
@@ -487,15 +541,18 @@ export default function CafeCanvas() {
 
       const ctx: Ctx2D = new SkiaCanvas2D(skCanvas);
 
-      catsRef.current.forEach((cat) => {
-        if (
-          cat.state === 'seated' &&
-          cat.seatedAt &&
-          Date.now() - cat.seatedAt >= 60000
-        ) {
-          sendCatOut(cat, width / 2, height + 110);
-        }
-      });
+      // Arrivals and departures both come off the customer list — a seated cat
+      // leaves when the café state drops it, not on a timer of its own, so the
+      // town knows it's coming back at the same moment the room does.
+      syncCustomers(height);
+
+      // A walk window closing is a timestamp going stale, not a state write,
+      // so the door is watched from here: the moment a pending customer's
+      // walk ends, it comes in. Oldest set off first, so only the head can be
+      // due — the loop almost never runs.
+      while (pending.length && hasJoined(pending[0], Date.now())) {
+        spawnCustomer(pending.shift() as CafeCustomer, height, true);
+      }
 
       catsRef.current = catsRef.current.filter(
         (cat) => !(cat.state === 'leaving' && isCatOffscreen(cat, width, height))
@@ -551,12 +608,17 @@ export default function CafeCanvas() {
       }
 
       // Drive the cup's enabled state from the simulation, but only touch React
-      // state when it actually flips.
-      const front = getFrontGroupInQueue();
-      const cost = front.length * PEARLS_PER_CAT;
-      const servable = canServeFrontGroup();
+      // state when it actually flips. "Can't serve" is two different stories:
+      // nobody is waiting (the cup just sits), or someone is waiting and the
+      // pearls are short — which gets said out loud, because a cup that
+      // silently refuses to pour reads as broken, not as unaffordable.
+      const servable = canServeFrontCat();
       setCanServe((prev) => (prev === servable ? prev : servable));
-      setServeCost((prev) => (prev === cost ? prev : cost));
+      const short =
+        !servable &&
+        getFrontCatInQueue() !== null &&
+        pearlsRef.current < PEARLS_PER_CAT;
+      setNeedPearls((prev) => (prev === short ? prev : short));
 
       animationFrameRef.current = requestAnimationFrame(render);
     };
@@ -565,7 +627,6 @@ export default function CafeCanvas() {
 
     return () => {
       if (animationFrameRef.current !== null) cancelAnimationFrame(animationFrameRef.current);
-      if (autoSpawnTimeoutRef.current) clearTimeout(autoSpawnTimeoutRef.current);
     };
   }, [palette, addCoins, spendPearls, addDrinkServed, picture]);
 
@@ -580,15 +641,15 @@ export default function CafeCanvas() {
   const bob = useRef(new Animated.Value(0)).current;
 
   // The pan responder is built once and reads everything it needs through
-  // refs. Rebuilding it per render would hand it a stale `serveFrontGroup`
+  // refs. Rebuilding it per render would hand it a stale `serveFrontCat`
   // mid-drag, and the drag would pay pearls against a snapshot of the queue.
   const cupHomeRef = useRef(cupHome);
   const canServeRef = useRef(false);
-  const serveRef = useRef(serveFrontGroup);
+  const serveRef = useRef(serveFrontCat);
 
   cupHomeRef.current = cupHome;
   canServeRef.current = canServe;
-  serveRef.current = serveFrontGroup;
+  serveRef.current = serveFrontCat;
 
   // A cup that's ready to be picked up bobs; one that isn't sits still.
   useEffect(() => {
@@ -618,27 +679,25 @@ export default function CafeCanvas() {
     return () => loop.stop();
   }, [canServe, dragging, bob]);
 
-  /** Nearest cat in the front group to the cup's mouth, if it's close enough. */
+  /** The cat at the front of the line, if the cup came down close enough to it. */
   const findDropTarget = useCallback((dx: number, dy: number): Cat | null => {
     const home = cupHomeRef.current;
     const view = scaleRef.current;
-    // Measured from the base of the cup rather than its centre: you set the cup
-    // down in front of the cat, so that's the point that has to reach them.
+    // The cup is measured as its whole vertical line, top to base, not a
+    // single point. It used to be just the base — "you set the cup down in
+    // front of the cat" — but the cup stands as tall as a cat, so covering
+    // the cat with the cup's *body* (the natural way to hand it over) left
+    // the base a full cat-height below the target and the drop silently
+    // missed. Any visible overlap should count.
     const cupX = (home.x + dx + CUP_WIDTH / 2 - view.offsetX) / view.scale;
-    const cupY = (home.y + dy + CUP_HEIGHT) / view.scale;
+    const cupTopY = (home.y + dy) / view.scale;
+    const cupBaseY = (home.y + dy + CUP_HEIGHT) / view.scale;
 
-    let best: Cat | null = null;
-    let bestDist = DROP_RADIUS;
+    const front = getFrontCatInQueue();
+    if (!front) return null;
 
-    getFrontGroupInQueue().forEach((cat) => {
-      const dist = Math.hypot(cat.x - cupX, cat.y - cupY);
-      if (dist < bestDist) {
-        bestDist = dist;
-        best = cat;
-      }
-    });
-
-    return best;
+    const nearestY = Math.max(cupTopY, Math.min(cupBaseY, front.y));
+    return Math.hypot(front.x - cupX, front.y - nearestY) < DROP_RADIUS ? front : null;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -801,8 +860,10 @@ export default function CafeCanvas() {
         accessibilityRole="button"
         accessibilityLabel={
           canServe
-            ? `Drag the boba to the waiting cat. Costs ${serveCost} pearls.`
-            : 'No cat is waiting to be served'
+            ? `Drag the boba to the cat at the front of the line. Costs ${PEARLS_PER_CAT} pearls.`
+            : needPearls
+              ? `Not enough pearls to serve — it costs ${PEARLS_PER_CAT}.`
+              : 'No cat is waiting to be served'
         }
         style={[
           styles.cup,
@@ -824,17 +885,18 @@ export default function CafeCanvas() {
         <BobaCupSprite flavor={flavor} width={CUP_WIDTH} />
       </Animated.View>
 
-      {canServe && !dragging && (
+      {(canServe || needPearls) && !dragging && (
         <View
           style={[styles.hintRow, { top: cupHome.y + CUP_HEIGHT + 8 }]}
           pointerEvents="none"
         >
           <View style={styles.hint}>
-            <Text style={styles.hintText}>Drag to serve</Text>
+            <Text style={styles.hintText}>{canServe ? 'Drag to serve' : 'Need'}</Text>
             <View style={styles.costRow}>
               <PearlIcon size={9} />
-              <Text style={styles.costText}>{serveCost}</Text>
+              <Text style={styles.costText}>{PEARLS_PER_CAT}</Text>
             </View>
+            {!canServe && <Text style={styles.hintText}>to serve</Text>}
           </View>
         </View>
       )}
