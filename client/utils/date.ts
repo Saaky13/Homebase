@@ -24,6 +24,19 @@ export function getPreviousDateKey(dateKey: string): string {
   return formatDateKey(date);
 }
 
+/**
+ * The Monday of the week containing the given day — the key the weekly
+ * review is filed under. Monday rather than Sunday because a review closes a
+ * working week, and "this week" in that sense starts on Monday.
+ */
+export function getWeekKey(dateKey: string): string {
+  const [y, m, d] = dateKey.split('-').map(Number);
+  const date = new Date(y, m - 1, d);
+  // getDay(): 0 = Sunday … 6 = Saturday. Distance back to Monday.
+  date.setDate(date.getDate() - ((date.getDay() + 6) % 7));
+  return formatDateKey(date);
+}
+
 export function daysBetweenDateKeys(fromKey: string, toKey: string): number {
   const [fy, fm, fd] = fromKey.split('-').map(Number);
   const [ty, tm, td] = toKey.split('-').map(Number);

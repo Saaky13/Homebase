@@ -130,8 +130,27 @@ export interface TodoItem {
   done: boolean;
 }
 
+/**
+ * One closed week. `weekKey` is the Monday of the week reviewed (see
+ * `getWeekKey`), which is also the once-per-week guard: a week can only be
+ * closed once. The texts are the user's own words and are kept — a review
+ * that vanishes after paying out would make this a quiz, not a journal.
+ */
+export interface WeeklyReview {
+  weekKey: string;
+  // option id from the rating row, e.g. 'strong' | 'steady' | 'rough' | 'lost'
+  rating: string;
+  highlight: string;
+  intention: string;
+}
+
 export interface DailyStat {
   missionCheckedIn: boolean;
+  // whether the daily reflection was answered this day. Day records written
+  // before this field existed simply lack it, and every read treats missing
+  // as false — no migration walks old records to add a key whose absence
+  // already means the right thing.
+  reflected: boolean;
   coinsEarned: number;
   drinksMade: number;
   drinksServed: number;
@@ -189,6 +208,12 @@ export interface FocusTimer {
   // elapsed seconds already paid out, so re-entering the section or reloading
   // never pays for the same minute twice
   creditedSeconds: number;
+  // Deep Focus doubles the pearl payout. It is a promise about attention —
+  // eventually it will block other apps; today it is the toggle and the rate.
+  // Locked while the clock runs (see `setDeepFocus`), and sticky across
+  // resets and finished sessions so it behaves like a mode, not a per-session
+  // checkbox you re-arm every time.
+  deepFocus: boolean;
 }
 
 export interface CafeState {
@@ -198,6 +223,8 @@ export interface CafeState {
   // the daily reflection pays out once per calendar day, same as the mission
   // check-in; this is the day it was last answered
   reflectionLastClaimedDate: string | null;
+  // every closed week, newest last; the weekKey doubles as the claim guard
+  weeklyReviews: WeeklyReview[];
   pearls: number;
   // The player's own progress, in `constants/userRank.ts` terms. It tracks
   // pearls *earned* rather than pearls *held*, so buying something never costs
@@ -325,12 +352,21 @@ const SECONDS_PER_PEARL = 300;
 // drift the moment this one changed.
 export const TODO_PEARL_REWARD = 1;
 
-const idleFocusTimer = (minutes = DEFAULT_FOCUS_MINUTES): FocusTimer => ({
+// The weekly review pays once per calendar week — bigger than the mission's
+// daily 25 because it closes seven days, smaller than two days of full
+// routine so skipping the week's work and journaling about it never wins.
+export const WEEKLY_REVIEW_PEARLS = 40;
+
+const idleFocusTimer = (
+  minutes = DEFAULT_FOCUS_MINUTES,
+  deepFocus = false
+): FocusTimer => ({
   durationSeconds: minutes * 60,
   remainingSeconds: minutes * 60,
   endsAt: null,
   isRunning: false,
   creditedSeconds: 0,
+  deepFocus,
 });
 
 const initialState: CafeState = {
@@ -338,6 +374,7 @@ const initialState: CafeState = {
   mission: '',
   missionLastClaimedDate: null,
   reflectionLastClaimedDate: null,
+  weeklyReviews: [],
   pearls: 100,
   // Zero, not 100: the opening pearls are a float to get you started, not work
   // you did. Rank one is meant to be a thing you walk in at.
@@ -501,6 +538,8 @@ function restoreFocusTimer(raw: unknown): FocusTimer {
     endsAt: null,
     isRunning: false,
     creditedSeconds: Number.isFinite(credited) ? Math.max(0, credited) : 0,
+    // Older saves have no deepFocus key; a strict === true reads them as off.
+    deepFocus: saved.deepFocus === true,
   };
 }
 
@@ -728,6 +767,7 @@ function ensureDailyStat(
     ...stats,
     [dateKey]: {
       missionCheckedIn: false,
+      reflected: false,
       coinsEarned: 0,
       drinksMade: 0,
       drinksServed: 0,
@@ -755,10 +795,14 @@ type CafeContextType = {
   setMission: (mission: string) => void;
   claimMissionPearlsForToday: (dateKey: string) => boolean;
   claimReflectionForToday: (dateKey: string, pearls: number) => boolean;
+  // Files one WeeklyReview and pays WEEKLY_REVIEW_PEARLS, once per weekKey.
+  claimWeeklyReview: (review: WeeklyReview) => boolean;
   setFocusDuration: (minutes: number) => void;
   startFocusTimer: () => void;
   pauseFocusTimer: () => void;
   resetFocusTimer: () => void;
+  // Arms/disarms Deep Focus (2× pearls). Refused while the clock runs.
+  setDeepFocus: (value: boolean) => void;
   // Advances the timer against the wall clock and pays out any whole minutes
   // that just completed. Returns true on the tick that finishes the session so
   // the screen can fire its one-off celebration.
@@ -1362,6 +1406,56 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
         return {
           ...credited,
           reflectionLastClaimedDate: dateKey,
+          // creditPearls ran ensureDailyStat, so today's record exists.
+          dailyStats: {
+            ...credited.dailyStats,
+            [dateKey]: {
+              ...credited.dailyStats[dateKey],
+              reflected: true,
+            },
+          },
+        };
+      });
+
+      return success;
+    },
+    [commit]
+  );
+
+  /**
+   * Closes a week. `weekKey` must come through `getWeekKey` — it is both the
+   * filing key and the once-per-week guard. Pays through `creditPearls`
+   * (convention 20) against today's date key, since the claim happens today
+   * even when the week it closes started six days ago.
+   */
+  const claimWeeklyReview = useCallback(
+    (review: WeeklyReview) => {
+      let success = false;
+
+      commit((prev) => {
+        if (!review.rating) return prev;
+        if (prev.weeklyReviews.some((r) => r.weekKey === review.weekKey)) {
+          return prev;
+        }
+
+        success = true;
+        const credited = creditPearls(
+          prev,
+          WEEKLY_REVIEW_PEARLS,
+          getTodayDateKey()
+        );
+
+        return {
+          ...credited,
+          weeklyReviews: [
+            ...credited.weeklyReviews,
+            {
+              weekKey: review.weekKey,
+              rating: review.rating,
+              highlight: review.highlight.trim(),
+              intention: review.intention.trim(),
+            },
+          ],
         };
       });
 
@@ -1372,11 +1466,19 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
 
   const setFocusDuration = useCallback(
     (minutes: number) => {
-      commit((prev) => ({
-        ...prev,
-        focusSessionActive: false,
-        focusTimer: idleFocusTimer(minutes),
-      }));
+      commit((prev) => {
+        // Changing the length replaces the timer wholesale, so a running
+        // session refuses it — otherwise a preset tap mid-block silently
+        // destroys the session it was sitting next to. The UI dims the
+        // presets too; this is the guard that makes the dimming honest.
+        if (prev.focusTimer.isRunning) return prev;
+
+        return {
+          ...prev,
+          focusSessionActive: false,
+          focusTimer: idleFocusTimer(minutes, prev.focusTimer.deepFocus),
+        };
+      });
     },
     [commit]
   );
@@ -1423,9 +1525,32 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
     commit((prev) => ({
       ...prev,
       focusSessionActive: false,
-      focusTimer: idleFocusTimer(prev.focusTimer.durationSeconds / 60),
+      focusTimer: idleFocusTimer(
+        prev.focusTimer.durationSeconds / 60,
+        prev.focusTimer.deepFocus
+      ),
     }));
   }, [commit]);
+
+  /**
+   * Deep Focus doubles pearls, so it can't be flipped while the clock runs —
+   * otherwise the winning move is to toggle it on just before each five-minute
+   * boundary. Set it before you start; it locks in with the session.
+   */
+  const setDeepFocus = useCallback(
+    (value: boolean) => {
+      commit((prev) => {
+        if (prev.focusTimer.isRunning) return prev;
+        if (prev.focusTimer.deepFocus === value) return prev;
+
+        return {
+          ...prev,
+          focusTimer: { ...prev.focusTimer, deepFocus: value },
+        };
+      });
+    },
+    [commit]
+  );
 
   /**
    * One atomic step of the clock. Rewards are derived from total elapsed time
@@ -1452,9 +1577,14 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
       const newBoba =
         Math.floor(elapsed / SECONDS_PER_BOBA) -
         Math.floor(timer.creditedSeconds / SECONDS_PER_BOBA);
+      // Deep Focus doubles pearls and only pearls — boba is the café's supply
+      // line and popularity is the café's standing, and neither gets better
+      // because your phone was locked. The pearl is the reward for the work,
+      // so it's the number the harder promise multiplies.
       const newPearls =
-        Math.floor(elapsed / SECONDS_PER_PEARL) -
-        Math.floor(timer.creditedSeconds / SECONDS_PER_PEARL);
+        (Math.floor(elapsed / SECONDS_PER_PEARL) -
+          Math.floor(timer.creditedSeconds / SECONDS_PER_PEARL)) *
+        (timer.deepFocus ? 2 : 1);
 
       const finished = remaining <= 0;
       completed = finished;
@@ -1491,7 +1621,7 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
         },
         focusSessionActive: !finished,
         focusTimer: finished
-          ? idleFocusTimer(timer.durationSeconds / 60)
+          ? idleFocusTimer(timer.durationSeconds / 60, timer.deepFocus)
           : { ...timer, remainingSeconds: remaining, creditedSeconds: elapsed },
       };
     });
@@ -2209,7 +2339,9 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
         setMission,
         claimMissionPearlsForToday,
         claimReflectionForToday,
+        claimWeeklyReview,
         setFocusDuration,
+        setDeepFocus,
         startFocusTimer,
         pauseFocusTimer,
         resetFocusTimer,

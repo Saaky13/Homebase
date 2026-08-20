@@ -6,9 +6,9 @@
  * one material, hard bevels, and section identity carried by a small accent
  * rather than by tinting the whole surface eight different colours.
  *
- * Scope is deliberately the hub only. The shop, shelter and habit form still
- * run the old soft-card styles; converting them is a later pass, and having
- * both languages in the tree at once is expected in the meantime.
+ * Scope is the hub and its satellites (the habit form included). The shop and
+ * shelter still run the old soft-card styles; converting them is a later pass,
+ * and having both languages in the tree at once is expected in the meantime.
  */
 
 import { isNightAt } from '../town/palette';
@@ -43,23 +43,25 @@ export interface PixelMaterial {
 }
 
 /**
- * Matcha paper. The hub is the self-improvement side of the app and gets its own
+ * Sky paper. The hub is the self-improvement side of the app and gets its own
  * material rather than borrowing the café's wood — the same reasoning that
- * gives the greenhouse magenta grow-lamps, so no two rooms read alike.
+ * gives the greenhouse magenta grow-lamps, so no two rooms read alike. It was
+ * matcha green for a while; the light blue reads calmer next to the pastel
+ * accents and stops the hub competing with the town's grass for the same hue.
  *
  * This one spans a real value range: the bevels are far enough from the face
  * to model light, which is what the flat pastels lacked.
  */
 export const DAY_MATERIAL: PixelMaterial = {
-  bg: '#F3F7E7',
-  face: '#DEEAC5',
-  faceLt: '#F1F8DF',
-  faceDk: '#A5C081',
-  sunk: '#D1E0B1',
-  ink: '#374F26',
-  inkDim: '#708C51',
-  track: '#CEDFAB',
-  trackEdge: '#A3BD7B',
+  bg: '#EFF5FB',
+  face: '#D8E7F4',
+  faceLt: '#F1F9FF',
+  faceDk: '#9CB9D3',
+  sunk: '#C9DCEC',
+  ink: '#2F4C68',
+  inkDim: '#6A87A1',
+  track: '#C6DAEA',
+  trackEdge: '#9BB8D1',
 };
 
 /**
@@ -69,19 +71,19 @@ export const DAY_MATERIAL: PixelMaterial = {
  * the same time-of-day treatment the town and café already run on the shared
  * `isNightAt()` clock, not a user-facing theme switch. The hub is an interior,
  * so it follows the café's logic rather than the town's — it deepens toward
- * steeped, shade-grown matcha instead of dropping to navy, and the ink stays
- * dark-on-light so every screen in here is as readable at 11pm as at noon.
+ * evening sky instead of dropping to navy, and the ink stays dark-on-light so
+ * every screen in here is as readable at 11pm as at noon.
  */
 export const NIGHT_MATERIAL: PixelMaterial = {
-  bg: '#DCE3C3',
-  face: '#D3DEAC',
-  faceLt: '#E7EFC4',
-  faceDk: '#94A968',
-  sunk: '#C6D79C',
-  ink: '#293C1A',
-  inkDim: '#5C7241',
-  track: '#BED393',
-  trackEdge: '#92AA66',
+  bg: '#D7E1EC',
+  face: '#C9D9E8',
+  faceLt: '#E3EEF8',
+  faceDk: '#8AA3BE',
+  sunk: '#BACDE0',
+  ink: '#22374F',
+  inkDim: '#54708C',
+  track: '#B6CADE',
+  trackEdge: '#86A4C0',
 };
 
 export const materialAt = (date: Date = new Date()): PixelMaterial =>
@@ -97,8 +99,11 @@ export const materialAt = (date: Date = new Date()): PixelMaterial =>
  */
 export const ACCENTS = {
   habits: '#E7A9C8',
-  mission: '#8FC2E1',
+  // Deeper than the old '#8FC2E1' — on the sky material a pale blue stripe
+  // sat within a step of the face and the Mission tile lost its identity.
+  mission: '#74A8DC',
   reflection: '#E4C983',
+  review: '#E89F9F',
   calendar: '#B8A5EF',
   todo: '#E8B38E',
   focus: '#9FD5BF',
@@ -113,6 +118,7 @@ export const ACCENT_INKS: Record<AccentKey, string> = {
   habits: '#8A4A67',
   mission: '#38617D',
   reflection: '#7A6230',
+  review: '#8A4444',
   calendar: '#4C3A7A',
   todo: '#8A5A33',
   focus: '#2F6B54',
@@ -123,7 +129,7 @@ export const ACCENT_INKS: Record<AccentKey, string> = {
 /**
  * Mid tones for icon fills.
  *
- * The accents themselves sit about one step from the matcha face, so filling an
+ * The accents themselves sit about one step from the face, so filling an
  * icon with its own accent made the fill vanish and left only the outline —
  * the sprout's leaves disappeared entirely. These are each accent pushed a
  * third of the way toward its ink, which is enough separation to read at 12x12
@@ -131,8 +137,9 @@ export const ACCENT_INKS: Record<AccentKey, string> = {
  */
 export const ACCENT_FILLS: Record<AccentKey, string> = {
   habits: '#D98CB2',
-  mission: '#6FA8CC',
+  mission: '#5589BE',
   reflection: '#D0AF63',
+  review: '#D97F7F',
   calendar: '#9C86DE',
   todo: '#D9976C',
   focus: '#7CBFA4',

@@ -56,13 +56,13 @@ cat cafe/
 ├── CLAUDE.md                # ← you are here
 └── client/
     ├── app/                 # expo-router pages
-    │   ├── _layout.tsx      # root layout (CafeProvider, TopBar, GuideOverlay, Stack)
+    │   ├── _layout.tsx      # root layout (CafeProvider, TopBar, GuideOverlay, FocusOverlay, Stack)
     │   ├── index.tsx        # TownScreen — the home screen (pixel-art town map)
     │   ├── cafe/index.tsx   # CafeTab — Skia café floor with cats, queue, drag-to-serve
-    │   ├── habits/index.tsx # HabitsTab — the "Growth Hub" (~1540 lines, all 8 sections + hub grid)
+    │   ├── habits/index.tsx # HabitsTab — the "Growth Hub" (~2170 lines, all 9 sections + hub grid)
     │   ├── shop/index.tsx   # ShopTab — coin-based shop (flavors, decor, upgrades)
     │   ├── cats/index.tsx   # CatsTab — the Cat Shelter (Adopt + Collection tabs)
-    │   └── habit-form.tsx   # modal form for creating/editing habits
+    │   └── habit-form.tsx   # modal form for creating/editing habits — on the pixel kit, two-step delete
     │
     ├── components/
     │   ├── CafeCanvas.tsx   # Skia game loop — mirrors cafeVisit: arrivals, queue, seating, serving
@@ -85,23 +85,24 @@ cat cafe/
     │   ├── AdoptionReveal.tsx  # Full-screen reveal after an adoption
     │   ├── CurrencyBar.tsx  # Coins + Pearls bar (unused — replaced by TopBar pills)
     │   ├── FocusSection.tsx # Focus timer UI — a Growth Hub section, on the pixel kit
+    │   ├── FocusOverlay.tsx # The focus curtain — full-screen night sky while a session runs; owns the settle tick
     │   ├── GuideOverlay.tsx # Animated bottom sheet — name prompt + contextual guide beats
     │   ├── Icons.tsx        # Coin / Pearl / Popularity pixel icons as SVG data-URIs
     │   ├── PopularityMeter.tsx  # Popularity bar shown on the café screen
     │   ├── TopBar.tsx       # Persistent top bar — brand, back button, coin/pearl/level pills
     │   ├── TownMap.tsx      # Pixel-art town map component (canvas-rendered)
-    │   ├── pixel/           # The Growth Hub pixel UI kit — panel, button, icon,
-    │   │                    #   text, progress, chip, and the day/night material hook
+    │   ├── pixel/           # The Growth Hub pixel UI kit — panel, button, icon, text,
+    │   │                    #   progress, chip, toggle, toast, and the day/night material hook
     │   ├── cafeConfig.ts    # Café layout constants — 10 table center coordinates
     │   ├── cafePixel.ts     # PixelPainter — the café's rect-only pixel-art primitives
     │   └── cafeRender.ts    # The room — floor, rug, wall, windows, counter, tables, door
     │
     ├── constants/
-    │   ├── achievements.ts  # 29 achievements across 6 categories + category colour defs
+    │   ├── achievements.ts  # 32 achievements across 6 categories + category colour defs
     │   ├── affinity.ts      # What each cat thinks of each drink — serveOutcome's coins/popularity/XP
     │   ├── bobaCup.ts       # Generated 20×30 boba cup grid — 3 flavours, variable fill
     │   ├── bonds.ts         # Cat bonds — XP curve per rarity, derived level, coin tip
-    │   ├── cafeData.ts      # Legacy cat roster (7), shop items (7), reflection prompts (4), café levels (5)
+    │   ├── cafeData.ts      # Legacy cat roster (7), shop items (7), reflection prompts (12, flat 4 pearls), café levels (5)
     │   ├── cafePalette.ts   # Café interior palette + its night variant
     │   ├── cafeVisit.ts     # Café visits as state — two timestamps per customer, phases derived from the clock
     │   ├── catLore.ts       # Per-cat record — adoption/serve dates, day parts, bondXp; odds and bios
@@ -110,14 +111,15 @@ cat cafe/
     │   ├── drinks.ts        # The menu — every drink's rarity, pearl cost, base coins, cup palette
     │   ├── gacha.ts         # Adoption draw — rarity weights, pickCat, starters, save seeding
     │   ├── gachaMachine.ts  # Pixel art for the capsule machine (36×54 grid, crank, capsules)
-    │   ├── guideScript.ts   # All guide beats — 25 contextual messages with priority/match/cooldown
+    │   ├── guideScript.ts   # All guide beats — 27 contextual messages with priority/match/cooldown
     │   ├── habitTiers.ts    # Keystone/Anchor/Quick tier definitions, pearl math functions
+    │   ├── library.ts       # The Library — 12 credited principles from real self-help books, daily rotation
     │   ├── popularity.ts    # Popularity system — decay, gains, café multiplier, spawn pacing
     │   └── userRank.ts      # The player's ladder — 10 ranks off pearls *earned*, buys nothing
     │
     ├── hooks/
     │   ├── guideEngine.ts   # Guide resolution engine — picks highest-priority eligible beat
-    │   ├── useCafeState.tsx  # THE state file (~1500 lines) — CafeProvider, all actions, persistence, migrations
+    │   ├── useCafeState.tsx  # THE state file (~2300 lines) — CafeProvider, all actions, persistence, migrations
     │   └── use-color-scheme.ts/web.ts
     │
     ├── town/
@@ -128,7 +130,7 @@ cat cafe/
     │   └── canvasPainter.ts # Canvas abstraction (web path; native would swap in Skia)
     │
     ├── utils/
-    │   ├── date.ts          # Date key helpers, streak computation, habit log types
+    │   ├── date.ts          # Date + week key helpers, streak computation, habit log types
     │   └── pixelSvg.ts      # Shared grid → SVG data-URI encoder (icons, cats, machine)
     │
     ├── scripts/
@@ -177,6 +179,11 @@ an animated bottom-sheet that delivers contextual messages, first-visit orientat
 milestone celebrations, and gentle nudges. It hides itself when `focusSessionActive`
 is true.
 
+The **FocusOverlay** (`components/FocusOverlay.tsx`) is mounted last in the root
+layout (zIndex 300, above the GuideOverlay's 200 and the TopBar), so a running
+focus session covers the whole app — see "The focus curtain" under Growth Hub
+sections. It renders null unless `focusTimer.isRunning`.
+
 ---
 
 ## State architecture
@@ -192,7 +199,8 @@ interface CafeState {
   mission: string;                           // free-text mission statement
   missionLastClaimedDate: string | null;     // dateKey of last mission check-in
   reflectionLastClaimedDate: string | null;  // dateKey of last reflection answer
-  pearls: number;                            // earned from habits, focus, mission, reflection
+  weeklyReviews: WeeklyReview[];             // every closed week, newest last; weekKey doubles as the claim guard
+  pearls: number;                            // earned from habits, focus, mission, reflection, weekly review
   userXp: number;                            // pearls *earned* ever — the player rank ladder
   coins: number;                             // earned from serving cats; spent in shop
   popularity: number;                        // 0–100 float, decays daily, drives spawn rate
@@ -250,10 +258,18 @@ interface Habit {
 
 interface DailyStat {
   missionCheckedIn: boolean;
+  reflected: boolean;     // daily reflection answered; old day records lack the key, reads treat missing as false
   coinsEarned: number;
   drinksMade: number;     // focus minutes → boba count
   drinksServed: number;   // cats served
   pearlsEarned: number;
+}
+
+interface WeeklyReview {
+  weekKey: string;        // Monday of the week reviewed (getWeekKey) — also the once-per-week guard
+  rating: string;         // option id from the rating row: 'strong' | 'steady' | 'rough' | 'lost'
+  highlight: string;      // "what's worth keeping" — the user's own words, kept forever
+  intention: string;      // "one aim for next week"
 }
 
 interface GuideState {
@@ -273,6 +289,7 @@ interface FocusTimer {
   endsAt: number | null;        // ms epoch when session finishes; null when not running
   isRunning: boolean;
   creditedSeconds: number;      // already paid out, so reloads never double-credit
+  deepFocus: boolean;           // 2× pearls; locked while running, sticky across resets — a mode, not a checkbox
 }
 
 interface TodoItem { id: string; text: string; done: boolean; }
@@ -343,10 +360,10 @@ hand a missing key initialState's zero and the backfill would never run.
 an internal helper beside `creditCoins`, not an exported action — is the only
 thing that touches `pearls`. It moves `pearls`, `userXp` and
 `dailyStats.pearlsEarned` in the same commit, which is what keeps a rebuilt
-rank equal to a lived one. Seven sites route through it: `addPearl`, the
-mission check-in, the reflection claim, the focus settle, `logHabitRep`,
-`unlogHabitRep` (negative, so un-logging takes the rank back too) and
-`toggleTodo` (negative on the toggle back). See convention 20.
+rank equal to a lived one. Eight sites route through it: `addPearl`, the
+mission check-in, the reflection claim, the weekly-review claim, the focus
+settle, `logHabitRep`, `unlogHabitRep` (negative, so un-logging takes the rank
+back too) and `toggleTodo` (negative on the toggle back). See convention 20.
 
 **Initial state:** 100 pearls, 0 coins, level 1, popularity 0, empty habits/logs/todos,
 `ownedCats: [...STARTER_CATS]` (mochi, clover, pebble).
@@ -368,12 +385,14 @@ These are the functions available on the context object returned by `useCafeStat
 | `setGuideContext` | `(context: string) => void` | Sets the guide match context (e.g. `'habits:mission'`) |
 | `setMission` | `(mission: string) => void` | Updates mission statement |
 | `claimMissionPearlsForToday` | `(dateKey: string) => boolean` | +25 pearls, once per day |
-| `claimReflectionForToday` | `(dateKey: string, pearls: number) => boolean` | +N pearls from reflection, once per day |
-| `setFocusDuration` | `(minutes: number) => void` | Changes focus timer length |
+| `claimReflectionForToday` | `(dateKey: string, pearls: number) => boolean` | +N pearls from reflection, once per day; also stamps `dailyStats[dateKey].reflected` |
+| `claimWeeklyReview` | `(review: WeeklyReview) => boolean` | Files one review + `WEEKLY_REVIEW_PEARLS` (40), once per `weekKey`; refuses an empty rating |
+| `setFocusDuration` | `(minutes: number) => void` | Changes focus timer length; refuses while running |
+| `setDeepFocus` | `(value: boolean) => void` | Toggles deep focus (2× pearls); refuses while running so the rate can't change mid-session |
 | `startFocusTimer` | `() => void` | Starts the focus countdown |
 | `pauseFocusTimer` | `() => void` | Pauses focus countdown |
 | `resetFocusTimer` | `() => void` | Resets focus timer to idle |
-| `settleFocusTimer` | `() => boolean` | Tick: awards boba (1/min) + pearls (1/5min) + popularity; returns `true` on the finishing tick |
+| `settleFocusTimer` | `() => boolean` | Tick: awards boba (1/min) + pearls (1/5min, ×2 in deep focus) + popularity; returns `true` on the finishing tick |
 | `addPearl` | `(amount?: number) => void` | +pearls |
 | `spendPearls` | `(amount: number) => boolean` | −pearls, returns success |
 | `addCoins` | `(amount: number) => void` | +coins, auto-levels if coins ≥ level×100 |
@@ -430,7 +449,9 @@ Habits (logged reps) → Pearls (tier-based) + Popularity (tier-based)
          ↓
 Mission check-in → 25 Pearls/day
          ↓
-Reflection answer → 2–5 Pearls/day
+Reflection answer → 4 Pearls/day
+         ↓
+Weekly review → 40 Pearls/week
          ↓
 Pearls → Spent to serve cats (5 pearls per cat)
          │
@@ -461,6 +482,10 @@ the economy that can go backwards through neglect alone.
 
 **Focus timer rates:** 1 boba per 60 seconds, 1 pearl per 300 seconds.
 These constants are `SECONDS_PER_BOBA` and `SECONDS_PER_PEARL` in `useCafeState.tsx`.
+Deep focus doubles the **pearl** payout only — boba and popularity are
+unchanged, so the honor-system toggle can't inflate the coin economy.
+`WEEKLY_REVIEW_PEARLS` (40) sits between the daily mission (25) and a full
+day's routine, priced as the biggest single thought the app asks for.
 
 Two of the arrows above pay in something that isn't a currency. The player's
 rank and a cat's bond are both *records of having kept showing up* — one for
@@ -640,17 +665,16 @@ of colour keys assembled from:
 > data-URI renders nothing on iOS or Android. It works on web only, because
 > there `<Image>` becomes a browser `<img>`.
 >
-> Four components are affected today: `Icons.tsx` (coin/pearl/star pills),
-> `CatSprite.tsx` (the shelter's whole collection grid), `GachaMachine.tsx`
-> (the capsule machine), and `BobaCupSprite.tsx` (the cup you drag to serve).
-> On a device the top bar loses its currency icons, the Cat Shelter shows an
-> empty grid, and the café's serve gesture has nothing to grab.
+> Two components are still affected: `GachaMachine.tsx` (the capsule machine)
+> and `BobaCupSprite.tsx` (the legacy three-flavour cup). `Icons.tsx` and
+> `CatSprite.tsx` have been ported to `PixelSprite` — the currency marks and
+> the shelter's collection grid draw on device now.
 >
-> **The fix is mechanical:** emit `<Rect>` elements with `react-native-svg`
-> instead of encoding a data-URI. The `ios-town-skia` branch does exactly this
-> for the currency icons (`Icons.tsx` + `iconGrids.ts`) — copy that pattern.
-> The other three still need porting, since the Cat Shelter and the pixel-art
-> café both landed after the device work started.
+> **The fix is mechanical:** walk the grid with `gridToPaths` and hand the
+> result to `components/PixelSprite.tsx`, which emits real `<Path>` elements
+> through `react-native-svg`. `Icons.tsx` and `CatSprite.tsx` are both done and
+> are the pattern to copy — cache the walk at module load (icons) or in a `Map`
+> keyed by sprite (cats), because these mount and unmount constantly.
 >
 > **Until then, don't add new `pixelSvg` callers** — every one widens the gap.
 > See convention 11.
@@ -1029,7 +1053,8 @@ the moment the 4s anti-flicker gap lapses and can never be got rid of.
 | `todo-first-visit` | orientation | 64 | no | — | On habits:todo |
 | `reflection-first-visit` | orientation | 63 | no | — | On habits:reflection |
 | `achievements-first-visit` | orientation | 62 | no | — | On habits:achievements |
-| `resources-first-visit` | orientation | 61 | no | — | On habits:resources |
+| `resources-first-visit` | orientation | 61 | no | — | On habits:resources (the Library) |
+| `review-first-visit` | orientation | 60 | no | — | On habits:review |
 | `habit-streak-7` | moment | 52 | no | — | Any habit has 7-day streak |
 | `habit-streak-3` | moment | 51 | no | — | Any habit has 3-day streak |
 | `first-cat-walked-out` | moment | 49 | no | — | `catsWalkedOut > 0` |
@@ -1040,6 +1065,7 @@ the moment the 4s anti-flicker gap lapses and can never be got rid of.
 | `first-focus-session` | moment | 44 | no | — | totalFocusMinutes ≥ 1 |
 | `greenhouse-thirsty` | nudge | 30 | yes | 10h | In town, a live plant unwatered today |
 | `boba-waiting-to-serve` | nudge | 26 | yes | 6h | In town, 3+ boba on hand, nothing served today |
+| `weekly-review-due` | nudge | 24 | yes | 20h | In town, it's Sunday, current `weekKey` unreviewed |
 | `mission-unclaimed-today` | nudge | 22 | yes | 20h | In town, has mission, not checked in today |
 | `no-focus-yet-today` | nudge | 18 | yes | 20h | In town, after 1pm, no focus today |
 | `mission-empty-nudge` | nudge | 14 | yes | 48h | In town, no mission set |
@@ -1072,12 +1098,15 @@ includes `/habits` AND that `state.guideContext === 'habits:${section}'`.
 
 ## Growth Hub sections (app/habits/index.tsx)
 
-The Growth Hub is a single screen (~1540 lines) with a local `section` state:
+The Growth Hub is a single screen (~2170 lines) with a local `section` state:
 
 ```typescript
-type HubSection = 'hub' | 'habits' | 'mission' | 'reflection' | 'focus'
+type HubSection = 'hub' | 'habits' | 'mission' | 'reflection' | 'review' | 'focus'
                 | 'calendar' | 'resources' | 'todo' | 'achievements';
 ```
+
+(`resources` is the Library's internal key — the tile says "Library", but the
+key stays because the accent, icon and guide context all hang off the name.)
 
 ### The pixel UI kit (components/pixel/ + constants/pixelTheme.ts + constants/pixelIcons.ts)
 
@@ -1095,27 +1124,37 @@ with.
 | `PixelIcon` | A 12×12 grid through `utils/pixelSvg.ts`, coloured per section accent — **web-only, see convention 12** |
 | `PixelProgress` | Sunken well, flat fill, snapped to whole percent |
 | `PixelChip` | A bevelled square label — replaces the `borderRadius: 999` pills |
+| `PixelToggle` | A sliding switch: sunken track, square knob that **jumps** (no easing), accent-coloured when on |
+| `PixelToast` | Transient confirmation bar — parent owns the `ToastValue`, component owns the 2.2s hold. The `Alert.alert` replacement (convention 22) |
 | `usePixelMaterial` | The day/dusk material, re-checked on a 60s timer |
 
-**One material, eight accents.** `PixelMaterial` carries the whole surface
+**One material, nine accents.** `PixelMaterial` carries the whole surface
 (`face`, `faceLt`, `faceDk`, `sunk`, `ink`, `inkDim`, `track`, `trackEdge`).
-Sections identify themselves with an accent stripe and an icon, not a fill:
-eight pastel fills at the same value read as eight equally important things,
+The material is **sky paper** — light blue (`#EFF5FB` ground, `#D8E7F4` face,
+`#2F4C68` ink). It was matcha green for a while; the blue reads calmer next to
+the pastel accents and stops the hub competing with the town's grass for the
+same hue. Sections identify themselves with an accent stripe and an icon, not
+a fill: pastel fills all at the same value read as equally important things,
 which is the flatness this replaced.
 
 | Section | Accent | Ink |
 |---|---|---|
 | Habits | `#E7A9C8` | `#8A4A67` |
-| Mission | `#8FC2E1` | `#38617D` |
+| Mission | `#74A8DC` | `#38617D` |
 | Reflection | `#E4C983` | `#7A6230` |
+| Review | `#E89F9F` | `#8A4444` |
 | Calendar | `#B8A5EF` | `#4C3A7A` |
 | To-Do | `#E8B38E` | `#8A5A33` |
 | Focus | `#9FD5BF` | `#2F6B54` |
 | Achievements | `#E3C26B` | `#7A6230` |
-| Resources | `#9FDCCB` | `#2F6B54` |
+| Resources (Library) | `#9FDCCB` | `#2F6B54` |
+
+Mission's accent deepened from `#8FC2E1` when the material went blue — a pale
+blue stripe on a blue face sat within a step of it and the tile lost its
+identity.
 
 `ACCENT_FILLS` is a third set — each accent pushed a third toward its ink.
-Accents sit about one value step from the rose face, so an accent-on-face fill
+Accents sit about one value step from the face, so an accent-on-face fill
 (the icons' interiors) disappeared entirely without it.
 
 `PixelIcon` goes through `utils/pixelSvg.ts`, which convention 12 warns is
@@ -1139,8 +1178,9 @@ which is louder than the plainer mark.
 
 **Dusk, not dark mode.** `materialAt()` switches to `NIGHT_MATERIAL` on the
 same `isNightAt()` clock as the town and café (7pm–6am). It stays dark-ink-on-
-light-ground and only deepens toward lamplit plum — it is not a user-facing
-theme switch, so convention 8 still holds.
+light-ground and only deepens toward evening sky — it is not a user-facing
+theme switch, so convention 8 still holds. The focus curtain below is the one
+deliberate dark surface in the app: it is a curtain, not a theme.
 
 ### The today strip
 
@@ -1154,19 +1194,48 @@ still took the top of the screen.
 
 | Section | Key render function | What it shows |
 |---|---|---|
-| `hub` | `renderHub()` | The today strip + a grid of 8 accented `PixelButton` tiles |
-| `habits` | `renderHabits()` (inline) | Today progress ring, habit tiles grouped by tier (via `TIER_ORDER`), "+ New habit" button |
+| `hub` | `renderHub()` | The today strip + a grid of 9 accented `PixelButton` tiles |
+| `habits` | `renderHabits()` (inline) | Today progress ring, habit tiles grouped by tier (via `TIER_ORDER`), a `−` un-log control on logged tiles, "+ New habit" button |
 | `mission` | `renderMission()` | Mission TextInput + save button, daily check-in (+25 pearls) |
-| `reflection` | `renderReflection()` | `getReflectionPromptForDate(todayKey)` — rotating daily question with 4 multiple-choice answers (2–5 pearls each) |
-| `focus` | `<FocusSection />` | Timer presets (5/15/25/45 min), start/pause/reset, break guidance, dev coin/pearl grants |
-| `calendar` | `renderCalendar()` | Month view with prev/next, an accent bar under logged days, tap-to-drill-down stats |
+| `reflection` | `renderReflection()` | `getReflectionPromptForDate(todayKey)` — rotating daily question, 12 prompts, every answer a flat 4 pearls |
+| `review` | `renderReview()` | Weekly review — rate the week (2×2 grid), keep one thing, aim one thing; +40 pearls once per `weekKey`; past weeks kept as a journal |
+| `focus` | `<FocusSection />` | Timer presets (5/15/25/45 min), the Deep Focus toggle (2× pearls), start/pause/reset, break guidance; dev grants only under `__DEV__` |
+| `calendar` | `renderCalendar()` | Month view with prev/next, an accent bar under logged days, tap-to-drill-down stats (Habits / Mission / Reflected / Pearls); future days disabled |
 | `todo` | `renderTodo()` | Text input, add button, list with check/delete |
-| `resources` | `renderResources()` | "Coming soon" placeholder cards |
-| `achievements` | `renderAchievements()` | 29 achievements grouped by category, filter chips, claim pills |
+| `resources` | `renderResources()` | The Library — today's principle + shelves of credited ideas from real books (`constants/library.ts`), each with a try-it jump into a section |
+| `achievements` | `renderAchievements()` | 32 achievements grouped by category, filter chips, claim pills |
 
 **The section state is a `useState`, not a route.** Navigating to `/habits`
 always lands on the hub grid first. The "< Back to Hub" button resets to hub.
 The `useEffect` calls `setGuideContext('habits:${section}')` whenever section changes.
+
+Feedback on any action in here is a `PixelToast` — "Mission saved", "Checked
+in · +25 pearls", "Week closed · +40 pearls" — never an `Alert.alert`, which
+react-native-web renders as nothing at all (convention 22). The habit form's
+delete is the same rule in another shape: a two-step confirm on the button
+itself (armed for 4 seconds, second tap deletes) instead of a native dialog.
+
+### The focus curtain (components/FocusOverlay.tsx)
+
+Starting a focus session drops a full-screen night sky over the entire app —
+stars, the countdown, a daily companion cat "holding your seat", the boba
+earned so far, and exactly one button: **Stop focusing**. The root is a
+`Pressable` that swallows every touch, so nothing behind it is reachable; the
+point is that the phone goes face-down. It uses its own hardcoded `NIGHT_SKY`
+material — the deliberate dark exception noted under convention 9.
+
+The overlay also **owns the 1-second settle tick** (plus the finish
+vibration and the `'focus:complete'` guide context). It used to live in
+`FocusSection`, which unmounts when you leave the hub — a session only paid
+out while you stood on the Focus screen. The overlay is mounted in the root
+layout and exists exactly while `isRunning`, so the tick and the session now
+share a lifetime by construction.
+
+**Deep Focus** is a `PixelToggle` on the Focus section: 2× pearls, locked
+while the clock runs (`setDeepFocus` refuses, so the rate can't be flipped
+just before a 5-minute boundary), sticky across resets. Today it is an
+honor-system promise about attention — the copy says so — with real
+app-blocking planned for native.
 
 ### How to add a new Growth Hub section (step-by-step)
 
@@ -1323,14 +1392,20 @@ them is a separate cleanup.
 
 ### Reflection prompts
 
-4 rotating daily questions, each with 4 options paying 2–5 pearls:
-- "How aligned were you with your mission today?"
-- "What was your biggest win today?"
-- "How did you handle challenges today?"
-- "How did your focus sessions go today?"
+**12** rotating daily questions, 4 options each — mission alignment, biggest
+win, hardest moment, focus, energy, attention, what tomorrow-you needs, what
+almost stopped you, what you'd repeat for a year, what you learned about
+yourself, which habit felt lightest, what deserves more time.
 
-Selection uses `daysSinceEpoch % 4` so the prompt rotates daily and stays
-stable throughout the day.
+**Every option pays the same flat `REFLECTION_PEARLS` (4).** The old set paid
+2–5 scaled to how well the day went, which bribed the flattering answer on the
+one screen whose whole value is honesty. The reward is for reflecting, not for
+having had a good day — the section footer says exactly that.
+
+Selection uses `daysSinceEpoch % REFLECTION_PROMPTS.length` so the prompt
+rotates daily and stays stable throughout the day.
+`claimReflectionForToday` also stamps `dailyStats[dateKey].reflected`, which
+the calendar drill-down and the `reflect-7` achievement read.
 
 ### Café levels
 
@@ -1525,7 +1600,7 @@ does not, so doing both double-counts.
 
 ## Achievements (constants/achievements.ts)
 
-29 achievements across 6 categories, surfaced as the `achievements` Growth Hub
+32 achievements across 6 categories, surfaced as the `achievements` Growth Hub
 section.
 
 Each has a `check(state)` predicate evaluated against **existing** state — no
@@ -1538,8 +1613,8 @@ Claiming pays `pearlReward` once; claimed ids live in `state.claimedAchievements
 
 | Category | Count | Tint | Edge | Ink |
 |---|---|---|---|---|
-| Habits 🌱 | 4 | `#D9F5EA` | `#9FD5BF` | `#2F6B54` |
-| Streaks 🔥 | 5 | `#FFDDBF` | `#E8B38E` | `#8A5A33` |
+| Habits 🌱 | 6 | `#D9F5EA` | `#9FD5BF` | `#2F6B54` |
+| Streaks 🔥 | 6 | `#FFDDBF` | `#E8B38E` | `#8A5A33` |
 | Focus ⏱ | 4 | `#CFEAFF` | `#8FC2E1` | `#38617D` |
 | Café ☕ | 6 | `#FFD7EA` | `#E7A9C8` | `#8A4A67` |
 | Cats 🐾 | 4 | `#DDD2FF` | `#B8A5EF` | `#4C3A7A` |
@@ -1548,9 +1623,36 @@ Claiming pays `pearlReward` once; claimed ids live in `state.claimedAchievements
 `tint`/`edge`/`ink` extend the `tint`/`ink` convention from `habitTiers.ts`.
 `CATEGORY_BY_ID` is the lookup map.
 
+The three newest — `reflect-7` (Inner Mirror), `review-first` (Week One,
+Closed), `review-4` (A Month in the Books) — read `totalReflections` (counted
+off `DailyStat.reflected`, with a ≥1 fallback for pre-field saves that have
+`reflectionLastClaimedDate` set) and `totalWeeklyReviews`
+(`state.weeklyReviews.length`) on `AchievementCheckState`.
+
 **Rendering:** earned cards fill with the category tint and take the app's hard
 shadow; locked ones ghost the emoji to `opacity: 0.28` rather than showing a
 padlock; the claim pill is pearl-purple (`#C8B6F2`).
+
+---
+
+## The Library (constants/library.ts)
+
+The old "Resources" placeholder, replaced with real content: **12 principles
+across 6 books** — Atomic Habits (4), The 7 Habits of Highly Effective People
+(4), Deep Work (2), The Compound Effect (1), Tiny Habits (1) — each written in
+the app's own words and **credited to its book and author**. A `Principle`
+carries a `tryIt` line and a `section` key, so every card ends in a pixel
+button that jumps straight into the hub section where you'd act on it
+(guarded by a `SECTION_KEYS.has` check so a bad key can't navigate).
+
+`principleForDate(dateKey)` rotates one principle to the top of the screen as
+"TODAY'S PRINCIPLE", same daily-modulo scheme as the reflection prompts;
+`sourceOf(principle)` resolves the credit line.
+
+**Reading pays no pearls, by design.** Every other section pays for *doing*;
+paying for scrolling text would teach checking the Library as a chore. The
+first-visit guide beat says it out loud: the good ideas pay out somewhere
+else in town.
 
 ---
 
@@ -1583,15 +1685,17 @@ shadow: 'rgba(92,58,42,0.16)'  outline: 'rgba(92,58,42,0.12)'
   rects; it now uses `components/pixel/PixelButton` like the rest of the hub
 
 ### Colour families
-- **Hub / Growth:** pinks, lavenders, soft whites (`#FFF6FB`, `#F1D6E6`, `#FFD7EA`)
+- **Hub / Growth:** sky blues (`#EFF5FB` ground, `#D8E7F4` face, `#2F4C68` ink) with one pastel accent per section (see the accent table)
 - **Café / retro:** warm creams, browns, golds (`#F8F1E7`, `#4E3226`, `#E7B85C`)
 - **Town map:** greens, earth tones (`#A8C98C` grass, `#E0CCAE` road, `#EFE0CA` stone)
-- Each hub tile has its own colour set (see tile table above)
+- **Shop / shelter / soft-card screens:** the pinks and lavenders of `colors.ts`
 
 ### Typography
-- System font only (no custom fonts loaded)
+- System font for prose; the Growth Hub and habit form set headings, labels and
+  numbers in `HandjetBubble` (see the pixel kit's Typography note)
 - Weights: 700 for labels, 800 for titles/buttons, 900 for large numbers
-- Sizes: 9–11 for captions/pills, 12–13 for body, 15–17 for headers, 22 for tile emoji, 26+ for hero
+- Soft-card sizes: 9–11 for captions/pills, 12–13 for body, 15–17 for headers;
+  the hub uses the quantised `TYPE` scale instead
 
 ---
 
@@ -1607,6 +1711,8 @@ function getTodayDateKey(): string;
 function getDateKey(year: number, month: number, day: number): string;
 // month is 0-indexed (JavaScript Date convention)
 function getPreviousDateKey(dateKey: string): string;
+function getWeekKey(dateKey: string): string;
+// dateKey of the Monday of the containing week — the weekly review's claim key
 function daysBetweenDateKeys(from: string, to: string): number;
 function repsOn(logs: HabitLogs, dateKey: string, habitId: string): number;
 function computeHabitStreak(
@@ -1650,16 +1756,24 @@ should generally not be committed with a session-local port.
   windows onto the town, chalk menu board, day/night lighting (2 visual style
   variants), with cats arriving from the town, queuing single-file, seating
   and one-drag-one-drink serving
-- Growth Hub with all 8 sections (habits, mission, reflection, focus, calendar,
-  todo, resources, achievements)
-- Three-tier habit system with rep logging, streaks, pearl math (budget + per-rep models)
-- Focus timer with boba/pearl payouts and break guidance
+- Growth Hub with all 9 sections (habits, mission, reflection, weekly review,
+  focus, calendar, todo, library, achievements), on the pixel kit's sky-blue
+  material with `PixelToast` feedback throughout
+- Three-tier habit system with rep logging, un-logging, streaks, pearl math
+  (budget + per-rep models), and a pixel-kit habit form with a two-step delete
+- Focus timer with boba/pearl payouts, break guidance, a Deep Focus mode
+  (2× pearls, locked while running), and a full-screen focus curtain
+  (`FocusOverlay`) that blocks the whole app until you stop
 - Mission statement with daily check-in (+25 pearls)
-- Daily reflection with rotating prompts (4 questions, 2–5 pearls)
+- Daily reflection with rotating prompts (12 questions, every answer a flat 4 pearls)
+- Weekly review (+40 pearls, once per week): rate the week, keep one thing,
+  aim one thing — past weeks kept as a journal, nudged on Sundays
+- The Library: 12 credited principles from real self-help books with try-it
+  jumps into the sections (`constants/library.ts`)
 - Popularity system (10%/day proportional decay, café multiplier 1.0–2.0×, spawn pacing)
 - Shop with 7 items across 3 categories (flavors, decor, upgrades)
-- Achievements: 29 across 6 categories, retroactive `check` predicates, pearl claims
-- Full guide/tutorial system with 25 contextual beats
+- Achievements: 32 across 6 categories, retroactive `check` predicates, pearl claims
+- Full guide/tutorial system with 27 contextual beats
 - Procedural cat sprite system (36 cats, 5 rarities, 9 patterns, 8 directions),
   wired into the café via `catImageCache`, the town via `town/draw.ts`, and
   React via `CatSprite`
@@ -1695,6 +1809,8 @@ should generally not be committed with a session-local port.
 - **Porting the `pixelSvg` components off SVG data-URIs** — the currency icons,
   cat collection grid, capsule machine and boba cup render nothing on device.
   See the warning in the cat sprite section
+- Real app-blocking during Deep Focus — the toggle is honor-system today; the
+  2× rate and the copy already promise the native blocking that comes later
 - Sound design
 - Notifications / reminders
 - Backend / cloud sync
@@ -1720,9 +1836,9 @@ should generally not be committed with a session-local port.
    `components/pixel/*` and the material from `usePixelMaterial()`, never a
    `borderRadius`, a gradient or a hardcoded pastel. Colour is passed at render
    time because it changes at dusk; a `StyleSheet` is frozen at module load, so
-   the local `pixel` sheet holds layout only. The shop, cat shelter and habit
-   form are still on the soft-card styles — both languages coexist until those
-   convert.
+   the local `pixel` sheet holds layout only. The habit form converted with the
+   hub; the shop and cat shelter are still on the soft-card styles — both
+   languages coexist until those convert.
 
 6. **The Growth Hub uses local section state, not routes.** Adding a new section
    means: add to `HubSection` type → add an entry to `HUB_TILES` → give it an
@@ -1750,6 +1866,8 @@ should generally not be committed with a session-local port.
     This survives unmounts, app restarts, and throttled intervals. Pausing stores
     `remainingSeconds`; running derives remaining from `endsAt - Date.now()`.
     Offline time is never credited — a session mid-run at close comes back paused.
+    The 1s settle tick lives in `FocusOverlay` (mounted in the root layout, alive
+    exactly while `isRunning`), never in a screen that can unmount mid-session.
 12. **Don't build new pixel art on `utils/pixelSvg.ts` — it is web-only.**
     It encodes a grid to an SVG data-URI rendered by a React Native `<Image>`,
     and **`<Image>` decodes PNG/JPEG/GIF/WebP, not SVG.** On iOS and Android it
@@ -1832,3 +1950,9 @@ should generally not be committed with a session-local port.
     closed — so it is gone, along with `setCafeOpen` and `cafeOpenRef`. Losing
     a cat is never a reflex you missed now; it is a day you didn't open the
     app, which is exactly the thing the charge should be reading.
+22. **`Alert.alert` is a silent no-op on react-native-web.** Never reach for it.
+    Confirmation feedback goes through `PixelToast` — the parent owns the
+    `ToastValue`, the component owns the 2.2s hold — and destructive confirms
+    are inline two-step buttons like the habit form's delete (armed for 4s,
+    second tap acts). A dialog that renders as nothing reads as the button
+    being broken, which is worse than no dialog at all.

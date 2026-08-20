@@ -1,15 +1,13 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Alert,
-  Pressable,
   SafeAreaView,
   ScrollView,
   StyleSheet,
-  Text,
   TextInput,
   View,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useFonts } from 'expo-font';
 import { useCafeState } from '../hooks/useCafeState';
 import {
   dailyPearlTotal,
@@ -18,11 +16,46 @@ import {
   pearlsForRep,
   TIER_ORDER,
 } from '../constants/habitTiers';
+import {
+  PixelButton,
+  PixelChip,
+  PixelPanel,
+  PixelText,
+  usePixelMaterial,
+} from '../components/pixel';
+import {
+  ACCENTS,
+  BEVEL_THIN,
+  PIXEL_FONT,
+  PIXEL_FONT_FILE,
+  PX,
+} from '../constants/pixelTheme';
 
+/** The danger accent — the kit has no red, and this form is where deleting lives. */
+const DANGER = '#D96C6C';
+
+/**
+ * The habit form, on the hub's pixel kit.
+ *
+ * It ran the old soft-card styles long after the hub converted, which meant
+ * long-pressing a pixel tile opened a rounded pastel modal from a different
+ * app. It also carried the hub's worst functional bug: deleting a habit went
+ * through `Alert.alert` with buttons, which react-native-web renders as
+ * nothing — the button simply did nothing on the platform the app runs on.
+ * Deletion is now a two-step press on the button itself, so the confirmation
+ * is visible everywhere the form is.
+ */
 export default function HabitFormScreen() {
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id?: string }>();
   const { state, addHabit, updateHabit, removeHabit } = useCafeState();
+
+  const m = usePixelMaterial();
+
+  // Loaded here as well as in the hub — expo-font caches by name, so this is
+  // free when the hub already loaded it, and it covers the form being opened
+  // fresh (a web reload lands directly on this route).
+  const [fontLoaded] = useFonts({ [PIXEL_FONT]: PIXEL_FONT_FILE });
 
   const existing = useMemo(
     () => (id ? state.habits.find((habit) => habit.id === id) : undefined),
@@ -38,6 +71,18 @@ export default function HabitFormScreen() {
   );
   const [reminderText, setReminderText] = useState(existing?.reminderText ?? '');
 
+  // Two-step delete. First press arms; second press within the window
+  // deletes. The timeout disarms it so an armed delete can't lie in wait
+  // under a thumb that comes back minutes later.
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const disarmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (disarmTimer.current) clearTimeout(disarmTimer.current);
+    },
+    []
+  );
+
   const tierDef = HABIT_TIERS[tier];
   const canSave = !!name.trim();
 
@@ -51,10 +96,8 @@ export default function HabitFormScreen() {
   };
 
   const handleSave = () => {
-    if (!canSave) {
-      Alert.alert('Name required', 'Give this habit a name first.');
-      return;
-    }
+    // The button is disabled without a name, so no alert branch is needed.
+    if (!canSave) return;
 
     const payload = {
       name: name.trim(),
@@ -76,198 +119,227 @@ export default function HabitFormScreen() {
 
   const handleDelete = () => {
     if (!existing) return;
-    Alert.alert('Delete habit', `Remove "${existing.name}" and its history?`, [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Delete',
-        style: 'destructive',
-        onPress: () => {
-          removeHabit(existing.id);
-          router.back();
-        },
-      },
-    ]);
+
+    if (!confirmingDelete) {
+      setConfirmingDelete(true);
+      if (disarmTimer.current) clearTimeout(disarmTimer.current);
+      disarmTimer.current = setTimeout(() => setConfirmingDelete(false), 4000);
+      return;
+    }
+
+    removeHabit(existing.id);
+    router.back();
   };
 
   const maxTimes = tierDef.maxTimesPerDay;
 
-  return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.topBar}>
-        <Pressable
-          onPress={() => router.back()}
-          style={({ pressed }) => [styles.backPill, pressed && styles.pressed]}
-        >
-          <Text style={styles.backPillText}>Cancel</Text>
-        </Pressable>
+  // Same rule as the hub: hold the first paint until the pixel face is in,
+  // or every label reflows the moment it lands.
+  if (!fontLoaded) {
+    return <SafeAreaView style={[styles.container, { backgroundColor: m.bg }]} />;
+  }
 
-        <Text style={styles.topTitle}>{isEditing ? 'Edit habit' : 'New habit'}</Text>
+  return (
+    <SafeAreaView style={[styles.container, { backgroundColor: m.bg }]}>
+      <View style={styles.topBar}>
+        <PixelButton
+          material={m}
+          behind={m.bg}
+          onPress={() => router.back()}
+          contentStyle={styles.backFace}
+        >
+          <PixelText size="small" color={m.inkDim}>
+            {'< Cancel'}
+          </PixelText>
+        </PixelButton>
+
+        <PixelText size="title" color={m.ink}>
+          {isEditing ? 'Edit habit' : 'New habit'}
+        </PixelText>
 
         <View style={styles.topSpacer} />
       </View>
 
       <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false}>
-        <View style={styles.card}>
-          <Text style={styles.label}>What is it?</Text>
-          <TextInput
-            value={name}
-            onChangeText={setName}
-            placeholder="Go to the gym"
-            placeholderTextColor="#9A8D95"
-            style={styles.input}
-            autoFocus={!isEditing}
-          />
+        <PixelPanel material={m} behind={m.bg} style={styles.card}>
+          <PixelText size="label" color={m.ink} style={styles.label}>
+            What is it?
+          </PixelText>
 
-          <TextInput
-            value={description}
-            onChangeText={setDescription}
-            placeholder="Why it matters (optional)"
-            placeholderTextColor="#9A8D95"
-            style={styles.input}
-          />
-        </View>
+          <PixelPanel material={m} inset sunken bevel={BEVEL_THIN} style={styles.inputWell}>
+            <TextInput
+              value={name}
+              onChangeText={setName}
+              placeholder="Go to the gym"
+              placeholderTextColor={m.inkDim}
+              style={[styles.input, { color: m.ink }]}
+              autoFocus={!isEditing}
+            />
+          </PixelPanel>
 
-        <View style={styles.card}>
-          <Text style={styles.label}>How heavy is it?</Text>
-          <Text style={styles.help}>This sets what each rep is worth.</Text>
+          <PixelPanel material={m} inset sunken bevel={BEVEL_THIN} style={styles.inputWell}>
+            <TextInput
+              value={description}
+              onChangeText={setDescription}
+              placeholder="Why it matters (optional)"
+              placeholderTextColor={m.inkDim}
+              style={[styles.input, { color: m.ink }]}
+            />
+          </PixelPanel>
+        </PixelPanel>
+
+        <PixelPanel material={m} behind={m.bg} style={styles.card}>
+          <PixelText size="label" color={m.ink} style={styles.label}>
+            How heavy is it?
+          </PixelText>
+          <PixelText size="small" color={m.inkDim} plain style={styles.help}>
+            This sets what each rep is worth.
+          </PixelText>
 
           {TIER_ORDER.map((tierId) => {
             const def = HABIT_TIERS[tierId];
             const selected = tierId === tier;
 
             return (
-              <Pressable
+              <PixelButton
                 key={tierId}
+                material={m}
+                behind={m.face}
+                // The tier's ink at stripe width — its pale tint would sink
+                // into the face, and an unselected row wears no stripe at all.
+                accent={selected ? def.ink : undefined}
+                dimmed={!selected}
                 onPress={() => handleTierChange(tierId)}
-                style={({ pressed }) => [
-                  styles.tierRow,
-                  { backgroundColor: selected ? def.tint : '#FFFFFF' },
-                  selected && { borderColor: def.ink },
-                  pressed && styles.pressed,
-                ]}
+                style={styles.tierRow}
+                contentStyle={styles.tierFace}
               >
                 <View style={styles.tierTextWrap}>
-                  <Text style={[styles.tierLabel, selected && { color: def.ink }]}>
+                  <PixelText size="label" color={m.ink}>
                     {def.label}
-                  </Text>
-                  <Text style={styles.tierBlurb}>{def.blurb}</Text>
+                  </PixelText>
+                  <PixelText size="small" color={m.inkDim} plain style={styles.tierBlurb}>
+                    {def.blurb}
+                  </PixelText>
                 </View>
 
-                <View style={[styles.pearlChip, selected && { backgroundColor: '#FFFFFF' }]}>
-                  <Text style={[styles.pearlChipText, selected && { color: def.ink }]}>
-                    {def.pearls}
-                    {def.rewardModel === 'budget' ? '/day' : ' ea'}
-                  </Text>
-                </View>
-              </Pressable>
+                <PixelChip
+                  label={`${def.pearls}${def.rewardModel === 'budget' ? '/day' : ' ea'}`}
+                  material={m}
+                  tint={def.tint}
+                  color={def.ink}
+                />
+              </PixelButton>
             );
           })}
-        </View>
+        </PixelPanel>
 
-        <View style={styles.card}>
-          <Text style={styles.label}>How many times a day?</Text>
-          <Text style={styles.help}>
+        <PixelPanel material={m} behind={m.bg} style={styles.card}>
+          <PixelText size="label" color={m.ink} style={styles.label}>
+            How many times a day?
+          </PixelText>
+          <PixelText size="small" color={m.inkDim} plain style={styles.help}>
             {maxTimes === 1
               ? 'Keystone habits are once a day by design.'
               : `Caps the pearls this can pay out in one day. Up to ${maxTimes}.`}
-          </Text>
+          </PixelText>
 
           <View style={styles.stepperRow}>
-            <Pressable
-              onPress={() => setTimesPerDay((prev) => Math.max(1, prev - 1))}
+            <PixelButton
+              material={m}
+              behind={m.face}
               disabled={timesPerDay <= 1}
-              style={({ pressed }) => [
-                styles.stepperButton,
-                timesPerDay <= 1 && styles.stepperDisabled,
-                pressed && styles.pressed,
-              ]}
+              dimmed={timesPerDay <= 1}
+              onPress={() => setTimesPerDay((prev) => Math.max(1, prev - 1))}
+              contentStyle={styles.stepperFace}
             >
-              <Text style={styles.stepperText}>−</Text>
-            </Pressable>
+              <PixelText size="title" color={m.ink}>
+                -
+              </PixelText>
+            </PixelButton>
 
             <View style={styles.stepperValueWrap}>
-              <Text style={styles.stepperValue}>{timesPerDay}</Text>
-              <Text style={styles.stepperUnit}>
+              <PixelText size="hero" color={m.ink}>
+                {timesPerDay}
+              </PixelText>
+              <PixelText size="small" color={m.inkDim}>
                 {timesPerDay === 1 ? 'time a day' : 'times a day'}
-              </Text>
+              </PixelText>
             </View>
 
-            <Pressable
-              onPress={() => setTimesPerDay((prev) => Math.min(maxTimes, prev + 1))}
+            <PixelButton
+              material={m}
+              behind={m.face}
               disabled={timesPerDay >= maxTimes}
-              style={({ pressed }) => [
-                styles.stepperButton,
-                timesPerDay >= maxTimes && styles.stepperDisabled,
-                pressed && styles.pressed,
-              ]}
+              dimmed={timesPerDay >= maxTimes}
+              onPress={() => setTimesPerDay((prev) => Math.min(maxTimes, prev + 1))}
+              contentStyle={styles.stepperFace}
             >
-              <Text style={styles.stepperText}>+</Text>
-            </Pressable>
+              <PixelText size="title" color={m.ink}>
+                +
+              </PixelText>
+            </PixelButton>
           </View>
 
-          <View style={styles.mathBox}>
-            <Text style={styles.mathText}>
-              {tierDef.rewardModel === 'budget' ? (
-                <>
-                  {timesPerDay} × {pearlsForRep(tier, timesPerDay, 1)} ={' '}
-                  <Text style={styles.mathStrong}>
-                    {dailyPearlTotal(tier, timesPerDay)} pearls
-                  </Text>{' '}
-                  a day, plus your streak bonus. Splitting it into more reps divides
-                  the same total — it never pays more.
-                </>
-              ) : (
-                <>
-                  {timesPerDay} × {tierDef.pearls} = up to{' '}
-                  <Text style={styles.mathStrong}>
-                    {dailyPearlTotal(tier, timesPerDay)} pearls
-                  </Text>{' '}
-                  a day, plus your streak bonus.
-                </>
-              )}
-            </Text>
-          </View>
-        </View>
+          <PixelPanel material={m} inset bevel={BEVEL_THIN} style={styles.mathBox}>
+            <PixelText size="small" color={m.inkDim} plain style={styles.mathText}>
+              {tierDef.rewardModel === 'budget'
+                ? `${timesPerDay} x ${pearlsForRep(tier, timesPerDay, 1)} = ${dailyPearlTotal(
+                    tier,
+                    timesPerDay
+                  )} pearls a day, plus your streak bonus. Splitting it into more reps divides the same total — it never pays more.`
+                : `${timesPerDay} x ${tierDef.pearls} = up to ${dailyPearlTotal(
+                    tier,
+                    timesPerDay
+                  )} pearls a day, plus your streak bonus.`}
+            </PixelText>
+          </PixelPanel>
+        </PixelPanel>
 
-        <View style={styles.card}>
-          <Text style={styles.label}>Reminder note</Text>
-          <TextInput
-            value={reminderText}
-            onChangeText={setReminderText}
-            placeholder="Optional nudge to yourself"
-            placeholderTextColor="#9A8D95"
-            style={styles.input}
-          />
-        </View>
+        <PixelPanel material={m} behind={m.bg} style={styles.card}>
+          <PixelText size="label" color={m.ink} style={styles.label}>
+            Reminder note
+          </PixelText>
+          <PixelPanel material={m} inset sunken bevel={BEVEL_THIN} style={styles.inputWell}>
+            <TextInput
+              value={reminderText}
+              onChangeText={setReminderText}
+              placeholder="Optional nudge to yourself"
+              placeholderTextColor={m.inkDim}
+              style={[styles.input, { color: m.ink }]}
+            />
+          </PixelPanel>
+        </PixelPanel>
 
-        <Pressable
+        <PixelButton
+          material={m}
+          behind={m.bg}
+          accent={ACCENTS.habits}
           onPress={handleSave}
           disabled={!canSave}
-          style={({ pressed }) => [
-            styles.saveButton,
-            !canSave && styles.saveDisabled,
-            pressed && styles.pressed,
-          ]}
+          dimmed={!canSave}
+          style={styles.action}
+          contentStyle={styles.actionFace}
         >
-          <Text style={styles.saveButtonText}>
+          <PixelText size="label" color={m.ink}>
             {isEditing ? 'Save changes' : 'Create habit'}
-          </Text>
-        </Pressable>
-
-        <Pressable
-          onPress={() => router.back()}
-          style={({ pressed }) => [styles.cancelButton, pressed && styles.pressed]}
-        >
-          <Text style={styles.cancelButtonText}>Cancel</Text>
-        </Pressable>
+          </PixelText>
+        </PixelButton>
 
         {isEditing && (
-          <Pressable
+          <PixelButton
+            material={m}
+            behind={m.bg}
+            accent={confirmingDelete ? DANGER : undefined}
             onPress={handleDelete}
-            style={({ pressed }) => [styles.deleteButton, pressed && styles.pressed]}
+            style={styles.action}
+            contentStyle={styles.actionFace}
           >
-            <Text style={styles.deleteButtonText}>Delete habit</Text>
-          </Pressable>
+            <PixelText size="small" color={confirmingDelete ? DANGER : m.inkDim}>
+              {confirmingDelete
+                ? 'Tap again to delete — this erases its history'
+                : 'Delete habit'}
+            </PixelText>
+          </PixelButton>
         )}
 
         <View style={{ height: 40 }} />
@@ -276,125 +348,79 @@ export default function HabitFormScreen() {
   );
 }
 
+/** Layout only — every colour is passed at render time, because it changes at dusk. */
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#FFF6FB' },
+  container: { flex: 1 },
   topBar: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingHorizontal: PX * 8,
+    paddingVertical: PX * 6,
   },
-  backPill: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 999,
-    paddingHorizontal: 14,
-    paddingVertical: 9,
-    borderWidth: 1,
-    borderColor: '#E6D8F3',
-    minWidth: 78,
-    alignItems: 'center',
+  backFace: {
+    paddingHorizontal: PX * 4,
+    paddingVertical: PX * 3,
   },
-  backPillText: { color: '#6D5A7B', fontSize: 13, fontWeight: '700' },
-  topTitle: { fontSize: 16, fontWeight: '800', color: '#5B4A63' },
   topSpacer: { width: 78 },
-  scroll: { flex: 1, paddingHorizontal: 16 },
+  scroll: { flex: 1, paddingHorizontal: PX * 8 },
   card: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 24,
-    borderWidth: 1,
-    borderColor: '#F1D6E6',
-    padding: 16,
-    marginBottom: 12,
+    padding: PX * 5,
+    marginBottom: PX * 5,
   },
-  label: { fontSize: 15, fontWeight: '800', color: '#5A4C60', marginBottom: 6 },
-  help: { fontSize: 12, color: '#8B7682', marginBottom: 12, lineHeight: 17 },
+  label: {
+    marginBottom: PX * 2,
+  },
+  help: {
+    marginBottom: PX * 4,
+    lineHeight: 17,
+  },
+  inputWell: {
+    marginBottom: PX * 3,
+  },
   input: {
-    backgroundColor: '#FFFDFE',
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: '#ECD8E6',
-    paddingHorizontal: 12,
-    paddingVertical: 12,
+    paddingHorizontal: PX * 4,
+    paddingVertical: PX * 4,
     fontSize: 14,
-    color: '#5D4E5D',
-    marginBottom: 10,
   },
   tierRow: {
+    marginBottom: PX * 3,
+  },
+  tierFace: {
     flexDirection: 'row',
     alignItems: 'center',
-    borderRadius: 18,
-    borderWidth: 1.5,
-    borderColor: '#ECD8E6',
-    padding: 12,
-    marginBottom: 8,
+    padding: PX * 4,
+    gap: PX * 4,
   },
   tierTextWrap: { flex: 1 },
-  tierLabel: { fontSize: 14, fontWeight: '800', color: '#5D4E5D', marginBottom: 2 },
-  tierBlurb: { fontSize: 12, color: '#8B7682', lineHeight: 16 },
-  pearlChip: {
-    backgroundColor: '#F3ECF7',
-    borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    marginLeft: 10,
+  tierBlurb: {
+    marginTop: PX,
+    lineHeight: 16,
   },
-  pearlChipText: { fontSize: 13, fontWeight: '900', color: '#6C5A92' },
-  stepperRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  stepperButton: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    backgroundColor: '#F4F0FF',
-    borderWidth: 1,
-    borderColor: '#D8CBF8',
+  stepperRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: PX * 6,
+  },
+  stepperFace: {
+    width: PX * 22,
+    height: PX * 22,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  stepperDisabled: { opacity: 0.4 },
-  stepperText: { fontSize: 24, fontWeight: '900', color: '#6C5A92', lineHeight: 28 },
   stepperValueWrap: { flex: 1, alignItems: 'center' },
-  stepperValue: { fontSize: 30, fontWeight: '900', color: '#5A4C60' },
-  stepperUnit: { fontSize: 12, color: '#8B7682' },
   mathBox: {
-    backgroundColor: '#FFF8FB',
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: '#F3D9E8',
-    padding: 12,
-    marginTop: 14,
+    padding: PX * 4,
+    marginTop: PX * 5,
   },
-  mathText: { fontSize: 12, color: '#8B7682', lineHeight: 17 },
-  mathStrong: { fontWeight: '900', color: '#B0608B' },
-  saveButton: {
-    backgroundColor: '#F0B9D7',
-    borderRadius: 18,
-    paddingVertical: 15,
+  mathText: {
+    lineHeight: 17,
+  },
+  action: {
+    marginBottom: PX * 4,
+  },
+  actionFace: {
+    paddingVertical: PX * 4,
     alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#DB8FB9',
-    marginBottom: 10,
   },
-  saveDisabled: { opacity: 0.45 },
-  saveButtonText: { color: '#5F3F56', fontSize: 14, fontWeight: '800' },
-  cancelButton: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 18,
-    paddingVertical: 14,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#E6DAE2',
-    marginBottom: 10,
-  },
-  cancelButtonText: { color: '#8B7682', fontSize: 13, fontWeight: '800' },
-  deleteButton: {
-    backgroundColor: '#FFE5EA',
-    borderRadius: 18,
-    paddingVertical: 14,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#F0B7C8',
-  },
-  deleteButtonText: { color: '#B25570', fontSize: 13, fontWeight: '800' },
-  pressed: { transform: [{ translateY: 2 }], opacity: 0.9 },
 });

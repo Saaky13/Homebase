@@ -7,6 +7,7 @@ import '../web/globals.css';
 
 import { useColorScheme } from '../hooks/use-color-scheme';
 import { CafeProvider } from '../hooks/useCafeState';
+import FocusOverlay from '../components/FocusOverlay';
 import GuideOverlay from '../components/GuideOverlay';
 import TopBar from '../components/TopBar';
 
@@ -26,6 +27,9 @@ export default function RootLayout() {
         <View style={styles.root}>
           <TopBar />
           <GuideOverlay />
+          {/* Last, so the curtain draws over the bar and the guide alike
+              while a focus session runs. It also owns the settle tick. */}
+          <FocusOverlay />
           <Stack screenOptions={{ headerShown: false }}>
             <Stack.Screen name="index" />
             <Stack.Screen name="cafe/index" />
