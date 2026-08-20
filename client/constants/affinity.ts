@@ -137,11 +137,31 @@ function matchScore(cat: CatSpec, id: DrinkId): number {
   return pairScore(cat.id, id);
 }
 
+/**
+ * Rarest first, then dearest, then by id.
+ *
+ * Every preference list on every screen is sorted with this, so the order a
+ * player learns on the inspect card is the order they meet again in the
+ * almanac. Rarest-first because the top of a list is where the eye lands and
+ * the rarest drink is the one worth pouring — and because rarity tracks the
+ * payout, so the coins column reads roughly downhill.
+ */
+function byRarity(a: DrinkId, b: DrinkId): number {
+  return (
+    RARITY_RANK[DRINKS[b].rarity] - RARITY_RANK[DRINKS[a].rarity] ||
+    DRINKS[b].pearls - DRINKS[a].pearls ||
+    a.localeCompare(b)
+  );
+}
+
 export interface Preferences {
   favorite: DrinkId;
   likes: DrinkId[];
   dislikes: DrinkId[];
-  /** Every drink, best match first. Drives the almanac's full ordering. */
+  /**
+   * Every drink: the favourite, then likes, then the merely fine, then the
+   * refused — rarest first within each. Drives the almanac's full ordering.
+   */
   ranked: DrinkId[];
 }
 
@@ -186,17 +206,30 @@ export function preferencesFor(spec: CatSpec): Preferences {
   const likes = scored
     .filter((entry) => entry.id !== favorite && entry.score <= DISLIKE_SCORE)
     .slice(0, LIKES_COUNT)
-    .map((entry) => entry.id);
+    .map((entry) => entry.id)
+    .sort(byRarity);
 
   const dislikes = scored
     .filter((entry) => entry.score > DISLIKE_SCORE)
-    .map((entry) => entry.id);
+    .map((entry) => entry.id)
+    .sort(byRarity);
+
+  // Everything that is neither loved, liked nor refused. It has no section of
+  // its own on any screen, but `ranked` has to account for all fourteen.
+  const fine = scored
+    .map((entry) => entry.id)
+    .filter((id) => id !== favorite && !likes.includes(id) && !dislikes.includes(id))
+    .sort(byRarity);
 
   const prefs: Preferences = {
     favorite,
     likes,
     dislikes,
-    ranked: scored.map((entry) => entry.id),
+    // Affinity first, rarity within it. The match score that picked the groups
+    // has done its job by the time they exist, and it is not a quantity a
+    // player can see — sorting a *displayed* list by an invisible number makes
+    // the order look arbitrary. Rarity is legible on every row.
+    ranked: [favorite, ...likes, ...fine, ...dislikes],
   };
   cache.set(spec.id, prefs);
   return prefs;

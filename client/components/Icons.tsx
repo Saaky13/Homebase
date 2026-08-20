@@ -1,14 +1,18 @@
 import React from 'react';
-import { Image } from 'react-native';
-import { gridToSvgUri } from '../utils/pixelSvg';
+import { gridToPaths } from '../utils/pixelSvg';
+import { PixelSprite } from './PixelSprite';
 
 /**
  * Pixel-art icons for the café currencies and popularity.
  *
- * Each icon is a small grid of colour keys rendered into an SVG data-URI at
- * module load time. `shape-rendering="crispEdges"` keeps the pixel look sharp
- * at any display size. The grid-to-SVG conversion lives in utils/pixelSvg so
- * the cat sprites can render through the same path.
+ * Each icon is a small grid of colour keys walked into SVG paths once at module
+ * load and drawn by `PixelSprite` — real `<Path>` elements, not a data-URI in an
+ * `<Image>`. The data-URI is what these used to be, and it renders nothing at
+ * all on iOS and Android: React Native's `<Image>` decodes PNG/JPEG/GIF/WebP,
+ * not SVG. It only ever worked because `<Image>` becomes a browser `<img>` on
+ * web. This is the mechanical fix convention 12 asks for, and it matters more
+ * here than anywhere: these three are the app's currency marks, and the menu,
+ * the top bar and every price row lean on them.
  */
 
 type Grid = string[];
@@ -82,39 +86,22 @@ const STAR_PALETTE: Palette = {
   H: '#FFB5A0',   // highlight
 };
 
-// Pre-compute the URIs once at module load
-const COIN_URI = gridToSvgUri(COIN_GRID, COIN_PALETTE);
-const PEARL_URI = gridToSvgUri(PEARL_GRID, PEARL_PALETTE);
-const STAR_URI = gridToSvgUri(STAR_GRID, STAR_PALETTE);
+// Walked once at module load. Three 10x10 grids, and they mount and unmount
+// on every price row in the app.
+const COIN_PATHS = gridToPaths(COIN_GRID, COIN_PALETTE);
+const PEARL_PATHS = gridToPaths(PEARL_GRID, PEARL_PALETTE);
+const STAR_PATHS = gridToPaths(STAR_GRID, STAR_PALETTE);
 
 // ── Exported components ───────────────────────────────────────────────
 
 export function CoinIcon({ size = 14 }: { size?: number }) {
-  return (
-    <Image
-      source={{ uri: COIN_URI }}
-      style={{ width: size, height: size }}
-      accessibilityLabel="coin"
-    />
-  );
+  return <PixelSprite paths={COIN_PATHS} width={size} height={size} label="coin" />;
 }
 
 export function PearlIcon({ size = 14 }: { size?: number }) {
-  return (
-    <Image
-      source={{ uri: PEARL_URI }}
-      style={{ width: size, height: size }}
-      accessibilityLabel="pearl"
-    />
-  );
+  return <PixelSprite paths={PEARL_PATHS} width={size} height={size} label="pearl" />;
 }
 
 export function PopularityIcon({ size = 14 }: { size?: number }) {
-  return (
-    <Image
-      source={{ uri: STAR_URI }}
-      style={{ width: size, height: size }}
-      accessibilityLabel="popularity"
-    />
-  );
+  return <PixelSprite paths={STAR_PATHS} width={size} height={size} label="popularity" />;
 }
