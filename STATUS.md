@@ -5,31 +5,31 @@ the rationale; `SERVE-INTERACTION.md` holds the Phase 1 interaction in full.
 This file is **what's real on disk, what's next, and which lines to touch** —
 it doesn't restate the numbers, it points at them.
 
-Branch `brew-machine` · worktree `.claude/worktrees/almanac` · PR #27
-(cut off main @ 176ed0e; `cat-almanac` merged as PR #24)
-Preview: `preview_start` name `cat-cafe-almanac` (port 8099)
+All of it is on `main` now — PR #27 (the machine) and PR #28 (patience) are
+merged, and there is no live branch for this work.
+Preview: `preview_start` name `cat-cafe-web`
 Interaction spec: **`MACHINE.md`**, which supersedes `SERVE-INTERACTION.md` §2–4
 
 | Phase | What it is | Status |
 |---|---|---|
 | 0 | Data foundation | ✅ **built** — `recipes` here, bonds on main as `bondXp` |
 | 1 | Brew machine + hold-to-fill + payout preview | ✅ **built** |
-| 2 | Payout rewrite — affinity actually pays | 🟡 **coins landed early**; streak counter + choreography ⬜ |
-| 3 | Patience — the queue becomes a clock | 🔨 **another session, in parallel** |
+| 2 | Payout rewrite — affinity actually pays | 🟡 **coins landed**; streak counter + choreography ⬜ |
+| 3 | Patience — the queue becomes a clock | ✅ **built** — PR #28, and it went to hours, not seconds |
 | 4 | Bond levels — the coin tip | ✅ **built on main** |
 | 5 | The almanac | ✅ **built**, bond row included |
 | 6 | Gacha gives recipes | ✅ **built** — landed early, out of order |
 | 7 | Tuning & tie-ins | ⬜ |
 
-**Sequencing:** 0–2 are one shippable unit — after them the game plays
-differently. 3 should follow closely or the result is solvable by stalling.
-1 is closed and 2's coin half came with it; 3 is being built in parallel by
-another session, so nothing here touches `Cat.tsx` timers, `cafeVisit.ts` or
-the pacing curve in `constants/popularity.ts`.
+**Sequencing:** 0–2 were one shippable unit — after them the game plays
+differently — and 3 had to follow closely or the result was solvable by
+stalling. All three are in. **Phase 2's streak counter and serve choreography
+are the only unbuilt work left before Phase 7's tuning**, and the popularity
+question below has to be answered before either goes on screen.
 
 ---
 
-## Phase 0 — Data foundation · 🟡 mostly built
+## Phase 0 — Data foundation · ✅ built
 
 | Piece | State |
 |---|---|
@@ -117,13 +117,13 @@ be driven from the agent harness: the brew commit lives in the
 nothing. Everything React-side — preset tap, the flash, the peek, the sheet —
 is confirmed working, because none of it goes through the loop.
 
-### Closing out
-- `~/.local/bin/rtk npx tsc --noEmit` from `client/` — ✅ clean
-- Visual check on port 8099 — **needs a human at the keyboard**
-- **Show before committing** — not pre-authorized
-- Delete the scratch routes: `app/rail-preview.tsx`, `app/machine-preview.tsx`,
-  `app/menu-preview.tsx`, `components/MachinePreview.tsx`, `components/RecipeRail.tsx`
-- Then decide: new PR off `brew-machine`
+### Closed out
+Merged as PR #27. The scratch routes (`rail-preview`, `machine-preview`,
+`menu-preview`, `MachinePreview`, `RecipeRail`) were retired rather than
+committed, and `PayoutBadge` went with them.
+
+Still unwatched: the hold → brew → `✕` → dump sequence, for the reason above,
+and the steam reads too faint where it rises in front of the window pane.
 
 ---
 
@@ -165,33 +165,48 @@ second drag paying pearls twice against one queue snapshot.
 
 ---
 
-## Phase 3 — Patience · 🔨 built in parallel elsewhere
+## Phase 3 — Patience · ✅ built (PR #28)
 
-**Not this branch's work.** Another session is building it right now, which is
-why nothing here touches `Cat.tsx`'s timer fields, `constants/cafeVisit.ts` or
-the pacing curve in `constants/popularity.ts`. Left below as written so the two
-can be reconciled at merge.
+Condition (3) of the three the economy rests on. Built by another session while
+this branch ran, and it **went somewhere better than this file specified.**
 
-Condition (3) of the three the economy rests on, and the only one still
-missing. Without it, holding pearls is free and stalling is optimal.
+The plan here was a ~90s timer tightening with popularity. What shipped is
+**30 minutes to 4 hours**, set by the cat's rarity and multiplied by its bond
+(`BOND_PATIENCE`, `1 / 1.15 / 1.35 / 1.6 / 2` in `constants/bonds.ts`). At
+seconds, the café was a reflex test that argued against the rest of the
+product; at hours, the café fills while you are away and coming back to it is
+the visit. You lose cats by forgetting for a day, not by looking away for a
+minute.
 
-- Queue cats get a timer — ~90s at low popularity, tightening as the café
-  fills (pair it with `spawnIntervalMs`/`maxGroupSize` in
-  `constants/popularity.ts` so one pacing curve drives all three)
-- Timing out: walk out unserved, small popularity cost, **streak breaks**.
-  That last part is what makes a 10-streak feel precarious rather than merely
-  long — it can be lost to the room, not only to your own mistake.
-- `Cat.tsx` gains the timer field; the leave path already exists
-  (`CafeCanvas.tsx:493` runs the seated 60s exit through `sendCatOut`)
-- Some visible tell on the cat — **not the want bubble**, which was cut (see
-  below); the cat sprite or a ring at its feet is the room's remaining surface
+What that changed downstream:
 
-**`bobaInventory` finally gets spent here.** Focus sessions brew free *stock*
-of recipes you own (today `settleFocusTimer` only ever adds `classic`,
-`useCafeState.tsx:1300`); serving draws from stock before charging pearls.
-Focus time becomes prep time, and a long session buys a rush you can survive.
-The field widens from three flavours to `Record<DrinkId, number>` — needs a
-migration, and `guideScript.ts:96` reads the old shape.
+- **`patienceMs` is stored, not derived** — stamped at the door from the bond
+  the cat set off with, because a bond moves and a levelling serve would
+  otherwise retroactively extend the cat behind it.
+- **The queue no longer drains in order.** Each cat leaves on its own clock,
+  from wherever it stands, out through `QUEUE_EXIT_AISLE` so the sprite you
+  watch leave is the one that gave up.
+- **The walk-out charge lost its screen gate.** `popularityAfterWalkouts` takes
+  2% of standing per cat, proportionally, and the hour-scale timing bounds it —
+  a week away costs what a day away costs. Convention 21 in `CLAUDE.md` has the
+  whole argument.
+- **Arrivals are paced by you.** The café fills to `maxInside` and holds there
+  until you serve someone.
+- **Patience is not a popularity mechanic any more.** `constants/popularity.ts`
+  keeps the *consequence* of a walk-out and nothing else.
+- **It reads on the inspect card**, not on the floor — a `PATIENCE` row above
+  the bond, ticking on its own interval.
+
+**The streak break this phase was going to supply is still owed.** Phase 2's
+streak counter doesn't exist yet, so a walk-out currently costs standing and
+nothing else. When the counter lands, timing out has to break it — that is what
+makes a 10-streak feel precarious rather than merely long.
+
+**`bobaInventory` did not get spent here, and still isn't.** The plan — focus
+sessions brewing free *stock* of recipes you own, serving drawing from stock
+before charging pearls — is unbuilt and now belongs to Phase 7. `settleFocusTimer`
+still only ever adds `classic`. The field stays three flavours wide until then,
+and it is **not** write-only: `guideScript.ts` and the counter jars both read it.
 
 ---
 
@@ -249,7 +264,12 @@ collection sizes (`useCafeState.tsx:1647`).
 - **Order tickets** — a cat occasionally arrives demanding one specific drink
   at a premium, ignoring its own preferences. A rush event. Needs Phase 3's
   timer to have any teeth.
+- **Focus brews stock.** Phase 3's unbuilt half: a focus session brews free
+  cups of recipes you own, and serving draws from stock before charging pearls,
+  so focus time becomes prep time and a long session buys a rush you can
+  survive. Widens `bobaInventory` to `Record<DrinkId, number>` — needs a
+  migration, and `guideScript.ts:96` reads the old shape.
 - **Achievements** — almanac completion, per-rarity bonds, first legendary
-  match. `constants/achievements.ts` is 29 across 6 categories; `cats` and
+  match. `constants/achievements.ts` is 32 across 6 categories; `cats` and
   `cafe` are the natural homes. `check` predicates are evaluated against
   existing state so they light up retroactively — keep new ones monotonic.
