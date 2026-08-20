@@ -14,6 +14,7 @@ import { CupSprite } from './CupSprite';
 import { preferencesFor } from '../constants/affinity';
 import { DRINKS, type DrinkId } from '../constants/drinks';
 import { RARITY_STYLE, type CatSpec } from '../constants/catSprites';
+import { bondProgress, tipLabel } from '../constants/bonds';
 import { colors } from '../constants/colors';
 
 /**
@@ -30,8 +31,9 @@ import { colors } from '../constants/colors';
  * columns, and frosts the background so the floor stays visible through it —
  * how much a card *blocks* is mostly about opacity, not area.
  *
- * The bond row the spec calls for is absent because bond doesn't exist yet
- * (Phase 4).
+ * The bond row sits directly under the header, above the drinks: it is the
+ * one line on the card that is about *this* cat rather than about its species,
+ * and it changes as you play.
  *
  * **Position is driven by `Animated.Value`s, not props.** Both callers move
  * their cats inside a `requestAnimationFrame` loop that deliberately never
@@ -48,7 +50,7 @@ export const CARD_W = 268;
  * one. Sized for the common case — a full six likes and four dislikes — so
  * the card doesn't visibly jump on the frame after it opens.
  */
-export const CARD_H_ESTIMATE = 220;
+export const CARD_H_ESTIMATE = 244;
 export const CARD_GAP = 8;
 /** The card never comes closer than this to the edge of its container. */
 export const CARD_EDGE = 8;
@@ -167,6 +169,39 @@ function DrinkRow({
   );
 }
 
+/**
+ * How well you know this one, and what it tips.
+ *
+ * One row, not a panel: the level, the coin tip it currently pays, and a well
+ * showing the walk to the next level. The remaining-XP number is deliberately
+ * on the same line as the bar rather than under it — the bar alone says "some
+ * progress", and the thing a player actually wants is how much further.
+ */
+function BondRow({ cat, xp }: { cat: CatSpec; xp: number }) {
+  const bond = bondProgress(xp, cat.rarity);
+
+  return (
+    <View style={styles.bond}>
+      <Text style={styles.bondLabel}>BOND</Text>
+      <View style={styles.bondTrack}>
+        <View
+          style={[
+            styles.bondFill,
+            // Maxed reads as a full bar rather than an empty one — `fraction`
+            // is 1 at max precisely so this needs no special case.
+            { width: `${Math.round(bond.fraction * 100)}%` },
+          ]}
+        />
+      </View>
+      <Text style={styles.bondLevel}>Lv {bond.level}</Text>
+      <Text style={styles.bondTip}>{tipLabel(bond.level)}</Text>
+      <Text style={styles.bondNext}>
+        {bond.maxed ? 'max' : `${bond.remaining} to go`}
+      </Text>
+    </View>
+  );
+}
+
 function Section({ label, tint }: { label: string; tint: string }) {
   return <Text style={[styles.section, { color: tint }]}>{label}</Text>;
 }
@@ -174,6 +209,7 @@ function Section({ label, tint }: { label: string; tint: string }) {
 export default function CatInspectCard({
   cat,
   recipes,
+  bondXp,
   pos,
   pointerX,
   flip,
@@ -183,6 +219,8 @@ export default function CatInspectCard({
   cat: CatSpec;
   /** The player's menu, so a row can say whether it can be brewed. */
   recipes: DrinkId[];
+  /** This cat's banked bond XP. Level and tip derive from it — see `bonds.ts`. */
+  bondXp: number;
   pos: Animated.ValueXY;
   pointerX: Animated.Value;
   /** 0 when the card is above the cat, 1 when below. Picks which tail shows. */
@@ -231,6 +269,8 @@ export default function CatInspectCard({
       </View>
 
       <View style={styles.rule} />
+
+      <BondRow cat={cat} xp={bondXp} />
 
       <Section label="LOVES" tint={colors.accentBlush} />
       <HeroRow drink={prefs.favorite} onMenu={owns(prefs.favorite)} />
@@ -324,6 +364,33 @@ const styles = StyleSheet.create({
   },
 
   rule: { height: 1, backgroundColor: 'rgba(233,209,183,0.7)', marginTop: 6 },
+
+  bond: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 6,
+  },
+  bondLabel: {
+    fontSize: 8,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+    color: colors.brown500,
+  },
+  // Sunken well, flat fill — the same well the rest of the app draws progress
+  // in, at the one size that fits between two labels on a 268px card.
+  bondTrack: {
+    flex: 1,
+    height: 6,
+    borderRadius: 3,
+    overflow: 'hidden',
+    backgroundColor: 'rgba(213,176,141,0.45)',
+  },
+  bondFill: { height: '100%', borderRadius: 3, backgroundColor: colors.lavender },
+  bondLevel: { fontSize: 9, fontWeight: '900', color: colors.darkBrown },
+  // Gold, because it is coins — the same colour the pills pay them out in.
+  bondTip: { fontSize: 9, fontWeight: '900', color: colors.accentGold },
+  bondNext: { fontSize: 8, fontWeight: '700', color: colors.mediumGray },
 
   section: {
     fontSize: 8,

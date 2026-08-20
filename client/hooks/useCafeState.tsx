@@ -16,6 +16,7 @@ import {
   HabitLogs,
 } from '../utils/date';
 import { HabitTier, HABIT_TIERS, pearlsForRep } from '../constants/habitTiers';
+import { backfillUserXp } from '../constants/userRank';
 import {
   cafeQualityMultiplier,
   clampPopularity,
@@ -44,7 +45,8 @@ import {
   emptyCatStat,
   type CatStat,
 } from '../constants/catLore';
-import type { CatSpec } from '../constants/catSprites';
+import { getCat, type CatSpec } from '../constants/catSprites';
+import { serveOutcome } from '../constants/affinity';
 import {
   getPlant,
   growthStage,
@@ -195,6 +197,10 @@ export interface CafeState {
   // check-in; this is the day it was last answered
   reflectionLastClaimedDate: string | null;
   pearls: number;
+  // The player's own progress, in `constants/userRank.ts` terms. It tracks
+  // pearls *earned* rather than pearls *held*, so buying something never costs
+  // you rank — see `creditPearls`, the only place either number moves.
+  userXp: number;
   coins: number;
   // Stored as a float and rounded up only for display — see constants/popularity.ts.
   popularity: number;
@@ -317,6 +323,9 @@ const initialState: CafeState = {
   missionLastClaimedDate: null,
   reflectionLastClaimedDate: null,
   pearls: 100,
+  // Zero, not 100: the opening pearls are a float to get you started, not work
+  // you did. Rank one is meant to be a thing you walk in at.
+  userXp: 0,
   coins: 0,
   popularity: 0,
   popularityLastDecayedDate: null,
@@ -616,6 +625,43 @@ function creditCoins(
   return next;
 }
 
+/**
+ * Pearls in, plus the day's tally and the player's rank XP — the counterpart
+ * to `creditCoins`, and the only place any of the three moves.
+ *
+ * Every payout in the app that hands over pearls goes through here so the
+ * rank ladder is structural rather than remembered: adding a new way to earn
+ * pearls later can't quietly forget to feed it. `amount` may be negative (an
+ * un-logged habit rep refunds itself), and each figure floors at zero rather
+ * than going into the red.
+ *
+ * The one deliberate exception is claiming an achievement. An achievement pays
+ * for work whose pearls were already credited — counting the reward too would
+ * pay the ladder twice for the same days, and would put the total out of step
+ * with the `dailyStats` tallies an older save is rebuilt from.
+ */
+function creditPearls(
+  state: CafeState,
+  amount: number,
+  dateKey: string
+): CafeState {
+  const withDay = ensureDailyStat(state.dailyStats, dateKey);
+  const day = withDay[dateKey];
+
+  return {
+    ...state,
+    pearls: Math.max(0, state.pearls + amount),
+    userXp: Math.max(0, state.userXp + amount),
+    dailyStats: {
+      ...withDay,
+      [dateKey]: {
+        ...day,
+        pearlsEarned: Math.max(0, day.pearlsEarned + amount),
+      },
+    },
+  };
+}
+
 function ensureDailyStat(
   stats: Record<string, DailyStat>,
   dateKey: string
@@ -695,7 +741,9 @@ type CafeContextType = {
   setFocusSessionActive: (active: boolean) => void;
   claimAchievement: (achievementId: string, pearlReward: number) => boolean;
   pullPrize: () => PullResult;
-  recordCatsServed: (catIds: string[]) => void;
+  // Takes the drink because bond XP is scored per cat against what it was
+  // actually handed — the affinity multiplier can't be recovered afterwards.
+  recordCatsServed: (catIds: string[], drink: DrinkId) => void;
   // Lets cats in and sends finished ones home. Driven by a tick in the
   // provider, so both canvases can just render whatever it produced.
   settleCafeVisitNow: () => void;
@@ -790,6 +838,16 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
             habits: migrateHabits(parsed.habits),
             habitLogs: migrateHabitLogs(parsed.habitLogs),
             dailyStats: parsed.dailyStats ?? {},
+            // Saves from before the rank ladder existed rebuild their XP from
+            // the per-day pearl tallies the app was already keeping, so a
+            // routine kept for months doesn't arrive back at "New here". The
+            // explicit `undefined` check matters: the spread above would
+            // otherwise hand a missing key `initialState`'s zero and the
+            // backfill would never run.
+            userXp:
+              typeof parsed.userXp === 'number'
+                ? parsed.userXp
+                : backfillUserXp(parsed.dailyStats ?? {}),
             todos: Array.isArray(parsed.todos) ? parsed.todos : [],
             // Saves from before the shelter existed have no collection. Seed
             // one from the starters plus whatever cats they'd bought in the
@@ -997,20 +1055,7 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
     (amount = 1) => {
       const todayKey = getTodayDateKey();
 
-      commit((prev) => {
-        const withDay = ensureDailyStat(prev.dailyStats, todayKey);
-        return {
-          ...prev,
-          pearls: prev.pearls + amount,
-          dailyStats: {
-            ...withDay,
-            [todayKey]: {
-              ...withDay[todayKey],
-              pearlsEarned: withDay[todayKey].pearlsEarned + amount,
-            },
-          },
-        };
-      });
+      commit((prev) => creditPearls(prev, amount, todayKey));
     },
     [commit]
   );
@@ -1199,19 +1244,17 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
         if (!prev.mission.trim()) return prev;
         if (prev.missionLastClaimedDate === dateKey) return prev;
 
-        const withDay = ensureDailyStat(prev.dailyStats, dateKey);
         success = true;
+        const credited = creditPearls(prev, 25, dateKey);
 
         return {
-          ...prev,
-          pearls: prev.pearls + 25,
+          ...credited,
           missionLastClaimedDate: dateKey,
           dailyStats: {
-            ...withDay,
+            ...credited.dailyStats,
             [dateKey]: {
-              ...withDay[dateKey],
+              ...credited.dailyStats[dateKey],
               missionCheckedIn: true,
-              pearlsEarned: withDay[dateKey].pearlsEarned + 25,
             },
           },
         };
@@ -1234,20 +1277,12 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
       commit((prev) => {
         if (prev.reflectionLastClaimedDate === dateKey) return prev;
 
-        const withDay = ensureDailyStat(prev.dailyStats, dateKey);
         success = true;
+        const credited = creditPearls(prev, pearls, dateKey);
 
         return {
-          ...prev,
-          pearls: prev.pearls + pearls,
+          ...credited,
           reflectionLastClaimedDate: dateKey,
-          dailyStats: {
-            ...withDay,
-            [dateKey]: {
-              ...withDay[dateKey],
-              pearlsEarned: withDay[dateKey].pearlsEarned + pearls,
-            },
-          },
         };
       });
 
@@ -1358,23 +1393,21 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
         POPULARITY_GAINS.focusPerMinute *
         cafeQualityMultiplier(settled.unlockedItems);
 
-      const withDay = ensureDailyStat(settled.dailyStats, todayKey);
+      const credited = creditPearls(settled, newPearls, todayKey);
 
       return {
-        ...settled,
-        pearls: settled.pearls + newPearls,
-        popularity: clampPopularity(settled.popularity + popularityGain),
-        totalFocusMinutes: settled.totalFocusMinutes + newBoba,
+        ...credited,
+        popularity: clampPopularity(credited.popularity + popularityGain),
+        totalFocusMinutes: credited.totalFocusMinutes + newBoba,
         bobaInventory: {
-          ...settled.bobaInventory,
-          classic: settled.bobaInventory.classic + newBoba,
+          ...credited.bobaInventory,
+          classic: credited.bobaInventory.classic + newBoba,
         },
         dailyStats: {
-          ...withDay,
+          ...credited.dailyStats,
           [todayKey]: {
-            ...withDay[todayKey],
-            drinksMade: withDay[todayKey].drinksMade + newBoba,
-            pearlsEarned: withDay[todayKey].pearlsEarned + newPearls,
+            ...credited.dailyStats[todayKey],
+            drinksMade: credited.dailyStats[todayKey].drinksMade + newBoba,
           },
         },
         focusSessionActive: !finished,
@@ -1485,26 +1518,19 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
 
         awarded =
           pearlsForRep(habit.tier, habit.timesPerDay, nextReps) + priorStreak;
-        const withDay = ensureDailyStat(settled.dailyStats, dateKey);
 
         const popularityGain =
           popularityForRep(habit.tier, habit.timesPerDay) *
           cafeQualityMultiplier(settled.unlockedItems);
 
+        const credited = creditPearls(settled, awarded, dateKey);
+
         return {
-          ...settled,
-          pearls: settled.pearls + awarded,
-          popularity: clampPopularity(settled.popularity + popularityGain),
+          ...credited,
+          popularity: clampPopularity(credited.popularity + popularityGain),
           habitLogs: {
-            ...settled.habitLogs,
-            [dateKey]: { ...(settled.habitLogs[dateKey] ?? {}), [habitId]: nextReps },
-          },
-          dailyStats: {
-            ...withDay,
-            [dateKey]: {
-              ...withDay[dateKey],
-              pearlsEarned: withDay[dateKey].pearlsEarned + awarded,
-            },
+            ...credited.habitLogs,
+            [dateKey]: { ...(credited.habitLogs[dateKey] ?? {}), [habitId]: nextReps },
           },
         };
       });
@@ -1561,20 +1587,15 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
           nextDay[habitId] = current - 1;
         }
 
-        const withDay = ensureDailyStat(settled.dailyStats, dateKey);
+        // Negative through the same helper the award went through, so the
+        // rank XP a rep bought is handed back with the pearls rather than
+        // being quietly kept.
+        const credited = creditPearls(settled, -refunded, dateKey);
 
         return {
-          ...settled,
-          pearls: Math.max(0, settled.pearls - refunded),
-          popularity: clampPopularity(settled.popularity - popularityLoss),
-          habitLogs: { ...settled.habitLogs, [dateKey]: nextDay },
-          dailyStats: {
-            ...withDay,
-            [dateKey]: {
-              ...withDay[dateKey],
-              pearlsEarned: Math.max(0, withDay[dateKey].pearlsEarned - refunded),
-            },
-          },
+          ...credited,
+          popularity: clampPopularity(credited.popularity - popularityLoss),
+          habitLogs: { ...credited.habitLogs, [dateKey]: nextDay },
         };
       });
 
@@ -1619,22 +1640,17 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
         if (!todo) return prev;
 
         const nowDone = !todo.done;
-        const delta = nowDone ? TODO_PEARL_REWARD : -TODO_PEARL_REWARD;
-        const withDay = ensureDailyStat(prev.dailyStats, todayKey);
+        const credited = creditPearls(
+          prev,
+          nowDone ? TODO_PEARL_REWARD : -TODO_PEARL_REWARD,
+          todayKey
+        );
 
         return {
-          ...prev,
-          pearls: Math.max(0, prev.pearls + delta),
-          todos: prev.todos.map((entry) =>
+          ...credited,
+          todos: credited.todos.map((entry) =>
             entry.id === todoId ? { ...entry, done: nowDone } : entry
           ),
-          dailyStats: {
-            ...withDay,
-            [todayKey]: {
-              ...withDay[todayKey],
-              pearlsEarned: Math.max(0, withDay[todayKey].pearlsEarned + delta),
-            },
-          },
         };
       });
     },
@@ -1706,6 +1722,9 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
       commit((prev) => {
         if (prev.claimedAchievements.includes(achievementId)) return prev;
         claimed = true;
+        // Deliberately not `creditPearls`: an achievement is a receipt for
+        // work whose pearls — and whose rank XP — were paid when it was done.
+        // See the note on that helper.
         return {
           ...prev,
           claimedAchievements: [...prev.claimedAchievements, achievementId],
@@ -1801,9 +1820,14 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
    * The hour is read here rather than passed in because there is exactly one
    * moment being recorded — the serve — and letting the caller supply a clock
    * is how the tally ends up disagreeing with `dateKey`.
+   *
+   * `drink` is what the whole group was handed, which is also what makes this
+   * the bond XP writer: affinity is per cat, so one cup across three cats can
+   * pay three different amounts of XP — triple for the one that loves it,
+   * nothing at all for the one that won't drink it.
    */
   const recordCatsServed = useCallback(
-    (catIds: string[]) => {
+    (catIds: string[], drink: DrinkId) => {
       if (!catIds.length) return;
 
       const dateKey = getTodayDateKey();
@@ -1817,11 +1841,20 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
           // has never seen. That shouldn't happen — the spawner picks from
           // ownedCats — so open a record rather than dropping the cup.
           const prior = catStats[id] ?? emptyCatStat(null);
+          const spec = getCat(id);
+          // No spec means a roster id this build doesn't have. Record the cup
+          // — it was poured — but don't guess at an affinity for it.
+          const xp = spec && DRINKS[drink] ? serveOutcome(spec, drink).xp : 0;
+
           catStats[id] = {
             ...prior,
             firstServedOn: prior.firstServedOn ?? dateKey,
             lastServedOn: dateKey,
             parts: { ...prior.parts, [part]: (prior.parts[part] ?? 0) + 1 },
+            // `?? 0` rather than a bare add: a save written before bonds
+            // existed has stats without the field, and `undefined + 3` is NaN
+            // — which would persist and never recover.
+            bondXp: (prior.bondXp ?? 0) + xp,
           };
         }
 

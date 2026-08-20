@@ -41,6 +41,7 @@ import {
   PX,
   PixelMaterial,
 } from '../../constants/pixelTheme';
+import { RANK_ACCENT, TOTAL_RANKS, rankProgress } from '../../constants/userRank';
 import type { SectionIconKey } from '../../constants/pixelIcons';
 import ACHIEVEMENTS, {
   ACHIEVEMENT_CATEGORIES,
@@ -444,6 +445,11 @@ export default function HabitsTab() {
   const habitTotal = state.habits.length;
   const habitsLeft = Math.max(0, habitTotal - doneToday);
 
+  // The player's own standing. Deliberately the only number on this screen
+  // that isn't about today — everything below it resets at midnight, and this
+  // one only ever goes up.
+  const rank = rankProgress(state.userXp);
+
   // The three things that can actually be finished today. Everything else in
   // the hub is a place; these are the day's open loops, which is why they get
   // to be rows rather than tiles — and why each one is still a way in.
@@ -476,6 +482,48 @@ export default function HabitsTab() {
 
   const renderHub = () => (
     <>
+      {/*
+        Above the today strip, and above it on purpose. The strip answers
+        "what's left today" and empties every midnight; this answers "how long
+        have I kept this up", which is the thing the whole app is actually
+        about. It is a title, not a level — `state.level` is the cafe's, and is
+        what the greenhouse gates read — so this one wears a name and keeps its
+        number small.
+      */}
+      <PixelPanel material={m} behind={m.bg} style={pixel.rank}>
+        <View style={pixel.rankHead}>
+          <PixelText size="small" color={m.inkDim}>
+            {state.userName ? state.userName.toUpperCase() : 'YOU'}
+          </PixelText>
+          <PixelText size="small" color={m.inkDim}>
+            {`${rank.rank} / ${TOTAL_RANKS}`}
+          </PixelText>
+        </View>
+
+        <PixelText size="title" color={m.ink} style={pixel.rankTitle}>
+          {rank.title}
+        </PixelText>
+
+        <PixelProgress
+          value={rank.fraction}
+          material={m}
+          fill={RANK_ACCENT}
+          style={pixel.rankBar}
+        />
+
+        {/*
+          Said in pearls rather than in "XP". The rank is earned pearls and
+          nothing else, so naming the currency explains the mechanic without a
+          tutorial — and keeps the word XP free for a cat's bond, which is a
+          different number entirely.
+        */}
+        <PixelText size="small" color={m.inkDim} plain>
+          {rank.maxed
+            ? `${state.userXp} pearls earned, all told.`
+            : `${rank.remaining} more pearls to ${rank.nextTitle}`}
+        </PixelText>
+      </PixelPanel>
+
       {/*
         The today strip leads. The hub's first job is to answer "what is left
         today"; the hero card it replaces answered nothing and still took the
@@ -1384,6 +1432,23 @@ export default function HabitsTab() {
  * Every measurement is a multiple of `PX` so nothing lands on a half art pixel.
  */
 const pixel = StyleSheet.create({
+  rank: {
+    padding: PX * 5,
+    marginBottom: PX * 6,
+  },
+  rankHead: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  rankTitle: {
+    marginTop: PX,
+    marginBottom: PX * 3,
+  },
+  rankBar: {
+    marginBottom: PX * 3,
+  },
+
   today: {
     padding: PX * 5,
     marginBottom: PX * 6,

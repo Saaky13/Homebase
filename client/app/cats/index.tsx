@@ -43,6 +43,7 @@ import {
 } from '../../constants/drinks';
 import { catsFavoring, catsLiking, preferencesFor } from '../../constants/affinity';
 import { totalServed } from '../../constants/catLore';
+import { bondProgress } from '../../constants/bonds';
 import { useCafeState } from '../../hooks/useCafeState';
 
 type Tab = 'adopt' | 'collection' | 'almanac';
@@ -311,6 +312,10 @@ export default function CatsTab() {
               <View style={styles.grid}>
                 {cats.map((cat) => {
                   const served = totalServed(state.catStats?.[cat.id]);
+                  const bond = bondProgress(
+                    state.catStats?.[cat.id]?.bondXp ?? 0,
+                    cat.rarity
+                  );
                   const loves = preferencesFor(cat).favorite;
 
                   return (
@@ -337,9 +342,22 @@ export default function CatsTab() {
                         </Text>
                       </View>
 
+                      {/* Level and cups share one line, with the walk to the
+                          next level under it. A tile this size carries one
+                          number and one bar; two of each turns the grid into
+                          a spreadsheet. */}
                       <Text style={styles.catServed}>
-                        {served ? `served ${served}` : 'not yet served'}
+                        Lv {bond.level}
+                        {served ? ` · served ${served}` : ' · not yet served'}
                       </Text>
+                      <View style={styles.bondTrack}>
+                        <View
+                          style={[
+                            styles.bondFill,
+                            { width: `${Math.round(bond.fraction * 100)}%` },
+                          ]}
+                        />
+                      </View>
                     </Pressable>
                   );
                 })}
@@ -957,6 +975,17 @@ const styles = StyleSheet.create({
     color: colors.mediumGray,
     textAlign: 'center',
   },
+  bondTrack: {
+    width: '76%',
+    height: 4,
+    marginTop: 4,
+    borderRadius: 2,
+    overflow: 'hidden',
+    // Against the rarity tint the card is already painted in, not the paper —
+    // a well the colour of the page floats off the tile.
+    backgroundColor: 'rgba(92,58,42,0.14)',
+  },
+  bondFill: { height: '100%', borderRadius: 2, backgroundColor: colors.lavender },
 
   /* ------------------------------ the menu ------------------------------ */
 

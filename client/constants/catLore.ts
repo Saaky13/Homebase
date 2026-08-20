@@ -121,6 +121,11 @@ export function dayPartAt(hour: number): DayPart {
  * storing both invites the two to disagree. A four-slot tally is also all the
  * resolution the facts need — a 24-hour histogram would be 864 numbers
  * persisted to report one clause, most of it noise at realistic serve counts.
+ *
+ * `bondXp` follows the same rule and is the only bond field stored: level, tip
+ * and progress are all functions of it and the cat's rarity, so they live in
+ * `constants/bonds.ts` as derivations rather than as a second persisted number
+ * that has to be kept in step with the first.
  */
 export interface CatStat {
   /** dateKey of adoption, or null when the save predates this record. */
@@ -128,6 +133,8 @@ export interface CatStat {
   firstServedOn: string | null;
   lastServedOn: string | null;
   parts: Record<DayPart, number>;
+  /** Bond XP earned from serving this cat. See `constants/bonds.ts`. */
+  bondXp: number;
 }
 
 export function emptyCatStat(adoptedOn: string | null): CatStat {
@@ -136,6 +143,7 @@ export function emptyCatStat(adoptedOn: string | null): CatStat {
     firstServedOn: null,
     lastServedOn: null,
     parts: { morning: 0, afternoon: 0, evening: 0, night: 0 },
+    bondXp: 0,
   };
 }
 
@@ -187,6 +195,11 @@ export function backfillCatStats(
         evening: prior?.parts?.evening ?? 0,
         night: prior?.parts?.night ?? 0,
       },
+      // Saves from before bonds existed start the relationship at zero rather
+      // than being credited for serves the game wasn't scoring yet — there is
+      // no record of *which* drink went to whom, so any backfill would be a
+      // number invented to look generous.
+      bondXp: prior?.bondXp ?? 0,
     };
   }
 
