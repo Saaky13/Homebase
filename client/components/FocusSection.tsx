@@ -1,11 +1,12 @@
-import React, { useEffect } from 'react';
-import { View, StyleSheet, Vibration } from 'react-native';
+import React from 'react';
+import { View, StyleSheet } from 'react-native';
 import { useCafeState } from '../hooks/useCafeState';
 import {
   PixelButton,
   PixelPanel,
   PixelProgress,
   PixelText,
+  PixelToggle,
   usePixelMaterial,
 } from './pixel';
 import { ACCENTS, PX } from '../constants/pixelTheme';
@@ -31,10 +32,10 @@ export default function FocusSection() {
     resetCafe,
     setGuideContext,
     setFocusDuration,
+    setDeepFocus,
     startFocusTimer,
     pauseFocusTimer,
     resetFocusTimer,
-    settleFocusTimer,
   } = useCafeState();
 
   const m = usePixelMaterial();
@@ -44,31 +45,19 @@ export default function FocusSection() {
   const minutes = Math.floor(timer.remainingSeconds / 60);
   const seconds = timer.remainingSeconds % 60;
   const isFresh = timer.remainingSeconds === timer.durationSeconds;
+  // A paused mid-session block still counts as live: tapping a preset while
+  // one exists would silently abandon the progress, so the presets stay
+  // locked until the session runs out or is deliberately reset.
+  const sessionLive = timer.isRunning || !isFresh;
   const elapsed = timer.durationSeconds
     ? 1 - timer.remainingSeconds / timer.durationSeconds
     : 0;
 
-  useEffect(() => {
-    if (!timer.isRunning) return;
+  // The settle tick lives in FocusOverlay now — the overlay is mounted for
+  // exactly as long as a session runs, wherever in the app you are, so the
+  // clock keeps paying out even after this section unmounts.
 
-    const interval = setInterval(() => {
-      const completed = settleFocusTimer();
-      if (!completed) return;
-
-      Vibration.vibrate([0, 100, 50, 100]);
-
-      // Finishing a session used to fire `Alert.alert` and push a cat onto the
-      // legacy `state.queue` — a field the café canvas stopped reading long
-      // ago, and an Alert that react-native-web never renders. So on the one
-      // platform this app actually runs on, finishing a focus block produced
-      // no feedback at all. The guide says it instead.
-      setGuideContext('focus:complete');
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, [timer.isRunning, settleFocusTimer, setGuideContext]);
-
-  // The three handlers below used to write `focus:start`, `focus:shortSession`
+  // The handlers below used to write `focus:start`, `focus:shortSession`
   // and `focus:longSession` into guideContext. No beat has ever matched those
   // strings, and setting one wiped `habits:focus`, which is the context the
   // Focus section's own orientation beat keys off — so pressing Start quietly
@@ -142,6 +131,8 @@ export default function FocusSection() {
             material={m}
             behind={m.face}
             accent={ACCENTS.habits}
+            dimmed={isFresh && !timer.isRunning}
+            disabled={isFresh && !timer.isRunning}
             onPress={resetFocusTimer}
             style={pixel.actionHalf}
             contentStyle={pixel.actionFace}
@@ -152,8 +143,29 @@ export default function FocusSection() {
           </PixelButton>
         </View>
 
+        <PixelPanel material={m} inset behind={m.face} style={pixel.deepRow}>
+          <View style={pixel.deepCopy}>
+            <PixelText size="label" color={m.ink}>
+              Deep Focus
+            </PixelText>
+            <PixelText size="small" color={m.inkDim} plain style={pixel.deepSub}>
+              2× pearls. Phone-down mode — on your honor for now. Locks in when
+              you start.
+            </PixelText>
+          </View>
+          <PixelToggle
+            material={m}
+            value={timer.deepFocus}
+            onValueChange={setDeepFocus}
+            accent={accent}
+            disabled={timer.isRunning}
+          />
+        </PixelPanel>
+
         <PixelText size="small" color={m.inkDim} style={pixel.hint}>
-          5 min = 1 pearl · 1 min = 1 boba
+          {timer.deepFocus
+            ? '5 min = 2 pearls · 1 min = 1 boba'
+            : '5 min = 1 pearl · 1 min = 1 boba'}
         </PixelText>
       </PixelPanel>
 
@@ -169,6 +181,8 @@ export default function FocusSection() {
               material={m}
               behind={m.face}
               accent={timer.durationSeconds === value * 60 ? accent : undefined}
+              dimmed={sessionLive}
+              disabled={sessionLive}
               onPress={() => handlePresetPress(value)}
               style={pixel.preset}
               contentStyle={pixel.presetFace}
@@ -181,7 +195,9 @@ export default function FocusSection() {
         </View>
 
         <PixelText size="small" color={m.inkDim} plain style={pixel.body}>
-          Pick a block that feels realistic. The goal is rhythm, not suffering.
+          {sessionLive
+            ? 'A session is in progress — reset it to pick a new length.'
+            : 'Pick a block that feels realistic. The goal is rhythm, not suffering.'}
         </PixelText>
       </PixelPanel>
 
@@ -252,9 +268,11 @@ export default function FocusSection() {
         ))}
       </PixelPanel>
 
-      {/* Dev-only. The shelter's prices climb into the hundreds and the
-          greenhouse's seeds on top of that; earning it by serving cats is far
-          too slow to test an adoption or a full bench against. */}
+      {/* Dev builds only. The shelter's prices climb into the hundreds and
+          the greenhouse's seeds on top of that; earning it by serving cats is
+          far too slow to test an adoption or a full bench against. It used to
+          ship in production — with an unconfirmed one-tap full save wipe. */}
+      {__DEV__ ? (
       <PixelPanel material={m} behind={m.bg} style={pixel.card}>
         <PixelText size="small" color={m.inkDim}>
           DEV
@@ -282,6 +300,7 @@ export default function FocusSection() {
           ))}
         </View>
       </PixelPanel>
+      ) : null}
     </>
   );
 }
@@ -321,6 +340,20 @@ const pixel = StyleSheet.create({
   hint: {
     textAlign: 'center',
     marginTop: PX,
+  },
+  deepRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: PX * 4,
+    marginBottom: PX * 3,
+    gap: PX * 4,
+  },
+  deepCopy: {
+    flex: 1,
+  },
+  deepSub: {
+    marginTop: PX,
+    lineHeight: 16,
   },
   presetGrid: {
     flexDirection: 'row',

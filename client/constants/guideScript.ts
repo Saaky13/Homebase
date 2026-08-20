@@ -1,6 +1,6 @@
 import type { CafeState } from '../hooks/useCafeState';
 import { pullCost } from './gacha';
-import { computeHabitStreak } from '../utils/date';
+import { computeHabitStreak, getWeekKey } from '../utils/date';
 
 export interface GuideContext {
   state: CafeState;
@@ -326,6 +326,17 @@ export const GUIDE_SCRIPT: GuideBeat[] = [
     match: (ctx) => onHabitsSection(ctx, 'reflection'),
   },
   {
+    id: 'review-first-visit',
+    icon: '🚩',
+    title: 'the week, on purpose',
+    kind: 'orientation',
+    priority: 60,
+    actions: [GOT_IT],
+    message: () =>
+      `once a week, look back before you look forward. rate it honestly, keep one thing, aim one thing — forty pearls for closing the loop most people never close.`,
+    match: (ctx) => onHabitsSection(ctx, 'review'),
+  },
+  {
     id: 'achievements-first-visit',
     icon: '🏅',
     title: 'nothing to grind',
@@ -339,12 +350,12 @@ export const GUIDE_SCRIPT: GuideBeat[] = [
   {
     id: 'resources-first-visit',
     icon: '📚',
-    title: 'still brewing',
+    title: 'the library',
     kind: 'orientation',
     priority: 61,
     actions: [GOT_IT],
     message: () =>
-      `nothing here yet. guides and articles will live here eventually — for now, focus is still the best resource you've got, and I'd know.`,
+      `ideas from the books humans keep recommending to each other, shelved where you can act on them. no pearls for reading — the good ones pay out somewhere else in town.`,
     match: (ctx) => onHabitsSection(ctx, 'resources'),
   },
 
@@ -507,6 +518,28 @@ export const GUIDE_SCRIPT: GuideBeat[] = [
       inTown(ctx) &&
       !!ctx.state.mission.trim() &&
       ctx.state.missionLastClaimedDate !== ctx.todayKey,
+  },
+  {
+    id: 'weekly-review-due',
+    icon: '🚩',
+    title: 'the week wants closing',
+    kind: 'nudge',
+    priority: 24,
+    repeatable: true,
+    cooldownHours: 20,
+    actions: [
+      { label: 'close the week', kind: 'navigate', path: '/habits?section=review' },
+      { label: 'later', kind: 'dismiss' },
+    ],
+    message: () =>
+      `it's sunday and this week hasn't been reviewed. two minutes: rate it, keep one thing, aim one thing. next week starts cleaner for it.`,
+    match: (ctx) => {
+      if (!inTown(ctx)) return false;
+      const [y, mo, d] = ctx.todayKey.split('-').map(Number);
+      if (new Date(y, mo - 1, d).getDay() !== 0) return false;
+      const weekKey = getWeekKey(ctx.todayKey);
+      return !ctx.state.weeklyReviews.some((r) => r.weekKey === weekKey);
+    },
   },
   {
     id: 'no-focus-yet-today',

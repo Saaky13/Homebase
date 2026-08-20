@@ -55,6 +55,7 @@ export interface AchievementCheckState {
   missionSet: boolean;
   totalReflections: number;      // days where reflection was completed
   totalMissionCheckIns: number;  // days where mission was checked in
+  totalWeeklyReviews: number;    // weeks closed with a weekly review
   shopItemsOwned: number;        // owned items that are still sold in the Market
   catsOwned: number;             // size of the shelter collection, starters included
   legendaryCatsOwned: number;    // legendary + ultra, the two rarities worth bragging about
@@ -97,6 +98,33 @@ const ACHIEVEMENTS: AchievementDef[] = [
     category: 'habits',
     pearlReward: 10,
     check: (s) => s.missionSet,
+  },
+  {
+    id: 'reflect-7',
+    title: 'Inner Mirror',
+    description: 'Answer the daily reflection 7 times',
+    emoji: '🪞',
+    category: 'habits',
+    pearlReward: 30,
+    check: (s) => s.totalReflections >= 7,
+  },
+  {
+    id: 'review-first',
+    title: 'Week One, Closed',
+    description: 'Complete your first weekly review',
+    emoji: '🚩',
+    category: 'habits',
+    pearlReward: 20,
+    check: (s) => s.totalWeeklyReviews >= 1,
+  },
+  {
+    id: 'review-4',
+    title: 'A Month in the Books',
+    description: 'Close 4 weeks with a weekly review',
+    emoji: '📖',
+    category: 'streaks',
+    pearlReward: 50,
+    check: (s) => s.totalWeeklyReviews >= 4,
   },
 
   // ── Streaks ──────────────────────────────────────────────

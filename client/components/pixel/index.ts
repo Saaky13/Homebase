@@ -18,4 +18,8 @@ export { PixelProgress } from './PixelProgress';
 export type { PixelProgressProps } from './PixelProgress';
 export { PixelChip } from './PixelChip';
 export type { PixelChipProps } from './PixelChip';
+export { PixelToggle } from './PixelToggle';
+export type { PixelToggleProps } from './PixelToggle';
+export { PixelToast } from './PixelToast';
+export type { PixelToastProps, ToastValue } from './PixelToast';
 export { usePixelMaterial } from './usePixelMaterial';

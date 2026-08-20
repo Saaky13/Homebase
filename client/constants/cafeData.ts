@@ -64,41 +64,121 @@ export const SHOP_ITEMS = [
   },
 ];
 
+/**
+ * Every option pays the same 4 pearls, on purpose. The old set paid 5 for
+ * "completely aligned" and 2 for "reset day", which bribed the player to pick
+ * the flattering answer on the one screen whose entire value is honesty. The
+ * reward is for reflecting at all; the day you had doesn't change the rate.
+ */
+export const REFLECTION_PEARLS = 4;
+
 export const REFLECTION_PROMPTS = [
   {
     question: 'How aligned were you with your mission today?',
     options: [
-      { id: 'perfect', label: 'Completely aligned 🎯', pearls: 5 },
-      { id: 'good', label: 'Mostly aligned 📈', pearls: 4 },
-      { id: 'trying', label: 'Getting there 🌱', pearls: 3 },
-      { id: 'reset', label: 'Reset day, that\'s okay 💭', pearls: 2 },
+      { id: 'perfect', label: 'Completely aligned 🎯', pearls: REFLECTION_PEARLS },
+      { id: 'good', label: 'Mostly aligned 📈', pearls: REFLECTION_PEARLS },
+      { id: 'trying', label: 'Getting there 🌱', pearls: REFLECTION_PEARLS },
+      { id: 'reset', label: 'Reset day, that\'s okay 💭', pearls: REFLECTION_PEARLS },
     ],
   },
   {
     question: 'What was your biggest win today?',
     options: [
-      { id: 'focus', label: 'Stayed focused longer 🔥', pearls: 5 },
-      { id: 'health', label: 'Took care of myself 💪', pearls: 4 },
-      { id: 'learn', label: 'Learned something new 🧠', pearls: 4 },
-      { id: 'connection', label: 'Connected with someone 🤝', pearls: 3 },
+      { id: 'focus', label: 'Stayed focused longer 🔥', pearls: REFLECTION_PEARLS },
+      { id: 'health', label: 'Took care of myself 💪', pearls: REFLECTION_PEARLS },
+      { id: 'learn', label: 'Learned something new 🧠', pearls: REFLECTION_PEARLS },
+      { id: 'connection', label: 'Connected with someone 🤝', pearls: REFLECTION_PEARLS },
     ],
   },
   {
-    question: 'How did you handle challenges today?',
+    question: 'How did you handle the hardest moment today?',
     options: [
-      { id: 'overcame', label: 'Overcame obstacles 💪', pearls: 5 },
-      { id: 'adapted', label: 'Adapted and adjusted 🔄', pearls: 4 },
-      { id: 'rested', label: 'Took a break when needed 🌙', pearls: 3 },
-      { id: 'learning', label: 'Still learning how 📚', pearls: 2 },
+      { id: 'overcame', label: 'Pushed through it 💪', pearls: REFLECTION_PEARLS },
+      { id: 'adapted', label: 'Adapted and adjusted 🔄', pearls: REFLECTION_PEARLS },
+      { id: 'rested', label: 'Stepped back and rested 🌙', pearls: REFLECTION_PEARLS },
+      { id: 'learning', label: 'It got me today 📚', pearls: REFLECTION_PEARLS },
     ],
   },
   {
-    question: 'How did your focus sessions go today?',
+    question: 'How did your focus go today?',
     options: [
-      { id: 'amazing', label: 'Amazing—fully immersed ✨', pearls: 5 },
-      { id: 'good', label: 'Good—steady progress 📈', pearls: 4 },
-      { id: 'okay', label: 'Okay—some distractions 🤔', pearls: 3 },
-      { id: 'tough', label: 'Tough—but I tried 💪', pearls: 2 },
+      { id: 'amazing', label: 'Fully immersed ✨', pearls: REFLECTION_PEARLS },
+      { id: 'good', label: 'Steady progress 📈', pearls: REFLECTION_PEARLS },
+      { id: 'okay', label: 'Some distractions 🤔', pearls: REFLECTION_PEARLS },
+      { id: 'tough', label: 'Couldn\'t settle in 🌊', pearls: REFLECTION_PEARLS },
+    ],
+  },
+  {
+    question: 'What did your energy look like today?',
+    options: [
+      { id: 'charged', label: 'Charged up all day ⚡', pearls: REFLECTION_PEARLS },
+      { id: 'steady', label: 'Steady and even 🌤', pearls: REFLECTION_PEARLS },
+      { id: 'low', label: 'Ran low by afternoon 🪫', pearls: REFLECTION_PEARLS },
+      { id: 'fumes', label: 'Running on fumes 😮‍💨', pearls: REFLECTION_PEARLS },
+    ],
+  },
+  {
+    question: 'Who got the best of your attention today?',
+    options: [
+      { id: 'work', label: 'My real work 🎯', pearls: REFLECTION_PEARLS },
+      { id: 'people', label: 'People I care about 🤝', pearls: REFLECTION_PEARLS },
+      { id: 'phone', label: 'My phone, honestly 📱', pearls: REFLECTION_PEARLS },
+      { id: 'worries', label: 'My worries 🌀', pearls: REFLECTION_PEARLS },
+    ],
+  },
+  {
+    question: 'What would tomorrow-you thank you for?',
+    options: [
+      { id: 'started', label: 'Starting the hard thing 🌅', pearls: REFLECTION_PEARLS },
+      { id: 'finished', label: 'Finishing something 🏁', pearls: REFLECTION_PEARLS },
+      { id: 'rested', label: 'Actually resting 🛋', pearls: REFLECTION_PEARLS },
+      { id: 'showed', label: 'Showing up at all 🚪', pearls: REFLECTION_PEARLS },
+    ],
+  },
+  {
+    question: 'What almost stopped you today?',
+    options: [
+      { id: 'distraction', label: 'Distraction 🎪', pearls: REFLECTION_PEARLS },
+      { id: 'doubt', label: 'Doubt 🌫', pearls: REFLECTION_PEARLS },
+      { id: 'tired', label: 'Tiredness 😴', pearls: REFLECTION_PEARLS },
+      { id: 'nothing', label: 'Nothing, today was clean ✅', pearls: REFLECTION_PEARLS },
+    ],
+  },
+  {
+    question: 'If today repeated for a year, where would you land?',
+    options: [
+      { id: 'great', label: 'Somewhere great 🏔', pearls: REFLECTION_PEARLS },
+      { id: 'ahead', label: 'A little ahead 📈', pearls: REFLECTION_PEARLS },
+      { id: 'same', label: 'About where I am 🔁', pearls: REFLECTION_PEARLS },
+      { id: 'behind', label: 'Somewhere I don\'t want 🥀', pearls: REFLECTION_PEARLS },
+    ],
+  },
+  {
+    question: 'What did you learn about yourself today?',
+    options: [
+      { id: 'capable', label: 'I\'m more capable than I thought 💪', pearls: REFLECTION_PEARLS },
+      { id: 'rest', label: 'I need more rest than I admit 🌙', pearls: REFLECTION_PEARLS },
+      { id: 'avoid', label: 'I dodge hard starts 🙈', pearls: REFLECTION_PEARLS },
+      { id: 'figuring', label: 'Still figuring it out 🧭', pearls: REFLECTION_PEARLS },
+    ],
+  },
+  {
+    question: 'Which habit felt lightest today?',
+    options: [
+      { id: 'tiny', label: 'The tiny one 🌱', pearls: REFLECTION_PEARLS },
+      { id: 'anchored', label: 'The one with a fixed time ⏰', pearls: REFLECTION_PEARLS },
+      { id: 'none', label: 'None felt light today 🪨', pearls: REFLECTION_PEARLS },
+      { id: 'skipped', label: 'Didn\'t get to them 💭', pearls: REFLECTION_PEARLS },
+    ],
+  },
+  {
+    question: 'What deserves more of you tomorrow?',
+    options: [
+      { id: 'rock', label: 'The one big thing 🪨', pearls: REFLECTION_PEARLS },
+      { id: 'health', label: 'My body 💪', pearls: REFLECTION_PEARLS },
+      { id: 'someone', label: 'Someone I\'ve been missing 💌', pearls: REFLECTION_PEARLS },
+      { id: 'sleep', label: 'My own sleep 🌙', pearls: REFLECTION_PEARLS },
     ],
   },
 ];

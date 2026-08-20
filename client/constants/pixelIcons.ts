@@ -128,6 +128,22 @@ const achievements: IconGrid = [
   '..aaaaaaaa..',
 ];
 
+/** A planted pennant — the week closed, the flag set for the next one. */
+const review: IconGrid = [
+  '............',
+  '..aa........',
+  '..aabbbbbb..',
+  '..aabbbbbbb.',
+  '..aabbbbbbb.',
+  '..aabbbbbb..',
+  '..aabbbb....',
+  '..aa........',
+  '..aa........',
+  '..aa........',
+  '..aa........',
+  '............',
+];
+
 const resources: IconGrid = [
   '............',
   '.aaaa..aaaa.',
@@ -149,6 +165,7 @@ export const SECTION_ICONS = {
   habits,
   mission,
   reflection,
+  review,
   calendar,
   todo,
   focus,

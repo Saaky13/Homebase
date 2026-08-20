@@ -1,6 +1,5 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Alert,
   Animated,
   Pressable,
   SafeAreaView,
@@ -12,11 +11,15 @@ import {
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useFonts } from 'expo-font';
-import { TODO_PEARL_REWARD, useCafeState } from '../../hooks/useCafeState';
+import {
+  TODO_PEARL_REWARD,
+  WEEKLY_REVIEW_PEARLS,
+  useCafeState,
+} from '../../hooks/useCafeState';
 import { getReflectionPromptForDate, SHOP_ITEMS } from '../../constants/cafeData';
 import { getCat } from '../../constants/catSprites';
 import FocusSection from '../../components/FocusSection';
-import { getDateKey } from '../../utils/date';
+import { getDateKey, getWeekKey } from '../../utils/date';
 import {
   dailyPearlTotal,
   HABIT_TIERS,
@@ -30,8 +33,10 @@ import {
   PixelPanel,
   PixelProgress,
   PixelText,
+  PixelToast,
   usePixelMaterial,
 } from '../../components/pixel';
+import type { ToastValue } from '../../components/pixel';
 import {
   ACCENTS,
   ACCENT_INKS,
@@ -49,6 +54,12 @@ import ACHIEVEMENTS, {
   AchievementCheckState,
   CATEGORY_BY_ID,
 } from '../../constants/achievements';
+import {
+  LIBRARY,
+  principleForDate,
+  sourceOf,
+  type Principle,
+} from '../../constants/library';
 
 const SHOP_ITEM_IDS = new Set(SHOP_ITEMS.map((item) => item.id));
 
@@ -216,11 +227,27 @@ type HubSection =
   | 'habits'
   | 'mission'
   | 'reflection'
+  | 'review'
   | 'focus'
   | 'calendar'
   | 'resources'
   | 'todo'
   | 'achievements';
+
+/**
+ * The weekly rating vocabulary. Ids are what `WeeklyReview.rating` stores, so
+ * renaming a label is free but renaming an id orphans old reviews.
+ */
+const REVIEW_RATINGS = [
+  { id: 'strong', label: 'Strong week 💪' },
+  { id: 'steady', label: 'Steady week 🌤' },
+  { id: 'rough', label: 'Rough week 🌧' },
+  { id: 'lost', label: 'Lost the thread 🌀' },
+] as const;
+
+const RATING_LABELS: Record<string, string> = Object.fromEntries(
+  REVIEW_RATINGS.map((r) => [r.id, r.label])
+);
 
 interface CalendarDay {
   date: number;
@@ -245,11 +272,14 @@ const HUB_TILES: { key: SectionIconKey & HubSection; title: string; sub: string 
   { key: 'habits', title: 'Habits', sub: 'Build routines' },
   { key: 'mission', title: 'Mission', sub: 'Your direction' },
   { key: 'reflection', title: 'Reflection', sub: 'Close the day' },
+  { key: 'review', title: 'Weekly Review', sub: 'Close the week' },
   { key: 'calendar', title: 'Calendar', sub: 'Track days' },
   { key: 'todo', title: 'To-Do', sub: 'Quick list' },
   { key: 'focus', title: 'Focus', sub: 'Start a session' },
   { key: 'achievements', title: 'Achievements', sub: 'Milestones' },
-  { key: 'resources', title: 'Resources', sub: 'Guides later' },
+  // Keyed 'resources' still — the key is also the icon and accent name, and
+  // the town's Library building already routes here. Only the face changed.
+  { key: 'resources', title: 'Library', sub: 'Ideas that work' },
 ];
 
 const SECTION_KEYS = new Set<string>(['hub', ...HUB_TILES.map((tile) => tile.key)]);
@@ -273,6 +303,7 @@ export default function HabitsTab() {
     setMission,
     claimMissionPearlsForToday,
     claimReflectionForToday,
+    claimWeeklyReview,
     logHabitRep,
     unlogHabitRep,
     setPartialCountsAsDone,
@@ -299,6 +330,20 @@ export default function HabitsTab() {
   const [selectedDateKey, setSelectedDateKey] = useState<string | null>(null);
   const [missionDraft, setMissionDraft] = useState(state.mission);
   const [todoInput, setTodoInput] = useState('');
+
+  // Weekly review draft — local until the claim commits it.
+  const [reviewRating, setReviewRating] = useState<string | null>(null);
+  const [reviewHighlight, setReviewHighlight] = useState('');
+  const [reviewIntention, setReviewIntention] = useState('');
+
+  // Payout feedback. Every confirmation here used to be an `Alert.alert`,
+  // which react-native-web renders as nothing — so checking in, reflecting
+  // and claiming achievements were all silent on the platform the app runs
+  // on. The toast is the visible replacement.
+  const [toast, setToast] = useState<ToastValue | null>(null);
+  const showToast = useCallback((text: string, tint?: string) => {
+    setToast({ id: Date.now(), text, tint });
+  }, []);
 
   useEffect(() => {
     setGuideContext(`habits:${section}`);
@@ -400,46 +445,47 @@ export default function HabitsTab() {
   const handleSaveMission = () => {
     if (!hasPendingMissionEdit) return;
     setMission(missionDraft.trim());
-    Alert.alert('Saved', 'Your mission statement was updated.');
+    showToast('Mission saved', ACCENTS.mission);
   };
 
   const handleMissionCheckIn = () => {
     if (!canCheckInMissionToday) return;
-    const success = claimMissionPearlsForToday(todayKey);
+    // The button is disabled whenever this can't succeed, so a false return
+    // (a double-tap racing the commit) just stays silent.
+    if (!claimMissionPearlsForToday(todayKey)) return;
 
-    if (!success) {
-      Alert.alert(
-        'Not available',
-        state.mission.trim()
-          ? 'You already claimed your mission pearls today.'
-          : 'Write your mission statement first.'
-      );
-      return;
-    }
-
-    Alert.alert('Mission check-in complete', '+25 pearls');
+    showToast('Checked in · +25 pearls', ACCENTS.mission);
   };
 
   const handleLogRep = (habit: (typeof state.habits)[number]) => {
     const reps = todayLog[habit.id] ?? 0;
     if (reps >= habit.timesPerDay) return;
-    logHabitRep(todayKey, habit.id);
+
+    const newCount = logHabitRep(todayKey, habit.id);
+    // Mid-way reps speak through the dots filling in; the rep that completes
+    // the day is the one worth saying out loud.
+    if (newCount >= habit.timesPerDay) {
+      showToast(`${habit.name || 'Habit'} done for today`, habit.color);
+    }
+  };
+
+  const handleUnlogRep = (habit: (typeof state.habits)[number]) => {
+    const reps = todayLog[habit.id] ?? 0;
+    if (reps <= 0) return;
+    unlogHabitRep(todayKey, habit.id);
   };
 
   const reflectionPrompt = getReflectionPromptForDate(todayKey);
   const reflectedToday = state.reflectionLastClaimedDate === todayKey;
+  const weekClosed = state.weeklyReviews.some(
+    (r) => r.weekKey === getWeekKey(todayKey)
+  );
 
   const handleReflectionAnswer = (option: { pearls: number }) => {
     if (reflectedToday) return;
+    if (!claimReflectionForToday(todayKey, option.pearls)) return;
 
-    const success = claimReflectionForToday(todayKey, option.pearls);
-
-    if (!success) {
-      Alert.alert('Not available', 'You already reflected today.');
-      return;
-    }
-
-    Alert.alert('Reflection logged', `+${option.pearls} pearls`);
+    showToast(`Reflected · ${pearlLabel(option.pearls)}`, ACCENTS.reflection);
   };
 
   const habitTotal = state.habits.length;
@@ -566,7 +612,9 @@ export default function HabitsTab() {
 
       <View style={pixel.grid}>
         {HUB_TILES.map((tile) => {
-          const spent = tile.key === 'reflection' && reflectedToday;
+          const spent =
+            (tile.key === 'reflection' && reflectedToday) ||
+            (tile.key === 'review' && weekClosed);
           return (
             <PixelButton
               key={tile.key}
@@ -584,7 +632,11 @@ export default function HabitsTab() {
                   {tile.title}
                 </PixelText>
                 <PixelText size="small" color={m.inkDim} plain>
-                  {spent ? 'Done for today' : tile.sub}
+                  {spent
+                    ? tile.key === 'review'
+                      ? 'Closed this week'
+                      : 'Done for today'
+                    : tile.sub}
                 </PixelText>
               </View>
             </PixelButton>
@@ -661,11 +713,29 @@ export default function HabitsTab() {
               ) : null}
             </View>
 
-            <PixelText size="small" color={m.inkDim}>
-              {streak > 0
-                ? `${streak}d`
-                : `+${pearlsForRep(habit.tier, habit.timesPerDay, reps + 1)}`}
-            </PixelText>
+            <View style={pixel.habitMeta}>
+              <PixelText size="small" color={m.inkDim}>
+                {streak > 0
+                  ? `${streak}d`
+                  : `+${pearlsForRep(habit.tier, habit.timesPerDay, reps + 1)}`}
+              </PixelText>
+              {reps > 0 ? (
+                // The take-one-back button — a mis-tap used to be permanent
+                // because `unlogHabitRep` existed in state with no UI calling
+                // it. Nested inside the tile's pressable; the inner one wins
+                // the touch, so tapping the minus never also logs a rep.
+                <Pressable
+                  onPress={() => handleUnlogRep(habit)}
+                  hitSlop={PX * 3}
+                  accessibilityLabel={`Remove a ${habit.name} rep`}
+                  style={[pixel.unlog, { backgroundColor: m.sunk }]}
+                >
+                  <PixelText size="small" color={m.inkDim}>
+                    -
+                  </PixelText>
+                </Pressable>
+              ) : null}
+            </View>
           </View>
         </View>
       </PixelButton>
@@ -674,7 +744,7 @@ export default function HabitsTab() {
 
   const renderHabits = () => (
     <>
-      {sectionHead('Habits', 'Tap a tile to log a rep. Hold to edit.')}
+      {sectionHead('Habits', 'Tap a tile to log a rep. Hold to edit. The - takes one back.')}
 
       <PixelPanel material={m} behind={m.bg} style={pixel.card}>
         <View style={pixel.rowBetween}>
@@ -854,11 +924,167 @@ export default function HabitsTab() {
         <PixelText size="small" color={m.inkDim} plain style={pixel.cardBody}>
           {reflectedToday
             ? 'Already reflected today — a new question lands tomorrow.'
-            : 'Pick the one that is true, not the one worth the most.'}
+            : 'Every answer pays the same. Pick the true one.'}
         </PixelText>
       </PixelPanel>
     </>
   );
+
+  const renderReview = () => {
+    const weekKey = getWeekKey(todayKey);
+    const thisWeek = state.weeklyReviews.find((r) => r.weekKey === weekKey);
+    const history = [...state.weeklyReviews]
+      .filter((r) => r.weekKey !== weekKey)
+      .reverse()
+      .slice(0, 8);
+
+    const handleClaimReview = () => {
+      if (!reviewRating) return;
+      const success = claimWeeklyReview({
+        weekKey,
+        rating: reviewRating,
+        highlight: reviewHighlight,
+        intention: reviewIntention,
+      });
+      if (!success) return;
+
+      showToast(`Week closed · +${WEEKLY_REVIEW_PEARLS} pearls`, ACCENTS.review);
+      setReviewRating(null);
+      setReviewHighlight('');
+      setReviewIntention('');
+    };
+
+    const reviewEntry = (review: (typeof state.weeklyReviews)[number]) => (
+      <PixelPanel
+        key={review.weekKey}
+        material={m}
+        inset
+        bevel={BEVEL_THIN}
+        style={pixel.reviewEntry}
+      >
+        <View style={pixel.rowBetween}>
+          <PixelText size="small" color={m.ink}>
+            Week of {review.weekKey}
+          </PixelText>
+          <PixelText size="small" color={m.inkDim}>
+            {RATING_LABELS[review.rating] ?? review.rating}
+          </PixelText>
+        </View>
+        {review.highlight ? (
+          <PixelText size="small" color={m.inkDim} plain style={pixel.reviewLine}>
+            Kept: {review.highlight}
+          </PixelText>
+        ) : null}
+        {review.intention ? (
+          <PixelText size="small" color={m.inkDim} plain style={pixel.reviewLine}>
+            Next: {review.intention}
+          </PixelText>
+        ) : null}
+      </PixelPanel>
+    );
+
+    return (
+      <>
+        {sectionHead(
+          'Weekly Review',
+          'Once a week, look back on purpose. The daily reflection closes a day; this closes the arc.'
+        )}
+
+        {thisWeek ? (
+          <PixelPanel material={m} behind={m.bg} style={pixel.card}>
+            <PixelText size="label" color={m.ink}>
+              This week is closed
+            </PixelText>
+            <PixelText size="small" color={m.inkDim} plain style={pixel.cardBody}>
+              You called it: {RATING_LABELS[thisWeek.rating] ?? thisWeek.rating}.
+              A fresh review opens on Monday.
+            </PixelText>
+            {reviewEntry(thisWeek)}
+          </PixelPanel>
+        ) : (
+          <PixelPanel material={m} behind={m.bg} style={pixel.card}>
+            <PixelText size="label" color={m.ink}>
+              How was the week?
+            </PixelText>
+
+            <View style={pixel.ratingGrid}>
+              {REVIEW_RATINGS.map((option) => (
+                <PixelButton
+                  key={option.id}
+                  material={m}
+                  behind={m.face}
+                  accent={reviewRating === option.id ? ACCENTS.review : undefined}
+                  dimmed={reviewRating !== null && reviewRating !== option.id}
+                  onPress={() => setReviewRating(option.id)}
+                  style={pixel.ratingTile}
+                  contentStyle={pixel.ratingFace}
+                >
+                  <PixelText size="small" color={m.ink}>
+                    {option.label}
+                  </PixelText>
+                </PixelButton>
+              ))}
+            </View>
+
+            <PixelText size="small" color={m.inkDim} style={pixel.listHead}>
+              One thing worth keeping
+            </PixelText>
+            <PixelPanel material={m} inset sunken bevel={BEVEL_THIN} style={pixel.inputWell}>
+              <TextInput
+                value={reviewHighlight}
+                onChangeText={setReviewHighlight}
+                placeholder="What actually worked this week?"
+                placeholderTextColor={m.inkDim}
+                style={[pixel.input, { color: m.ink }]}
+              />
+            </PixelPanel>
+
+            <PixelText size="small" color={m.inkDim} style={pixel.listHead}>
+              One intention for next week
+            </PixelText>
+            <PixelPanel material={m} inset sunken bevel={BEVEL_THIN} style={pixel.inputWell}>
+              <TextInput
+                value={reviewIntention}
+                onChangeText={setReviewIntention}
+                placeholder="What gets more of you next week?"
+                placeholderTextColor={m.inkDim}
+                style={[pixel.input, { color: m.ink }]}
+              />
+            </PixelPanel>
+
+            <PixelButton
+              material={m}
+              behind={m.face}
+              accent={ACCENTS.review}
+              onPress={handleClaimReview}
+              disabled={!reviewRating}
+              dimmed={!reviewRating}
+              style={pixel.wideAction}
+              contentStyle={pixel.wideActionFace}
+            >
+              <PixelText size="label" color={m.ink}>
+                Close the week (+{WEEKLY_REVIEW_PEARLS} pearls)
+              </PixelText>
+            </PixelButton>
+
+            <PixelText size="small" color={m.inkDim} plain style={pixel.cardBody}>
+              The rating is the only required part. The two lines are for
+              future-you, who reads this list more often than you'd think.
+            </PixelText>
+          </PixelPanel>
+        )}
+
+        {history.length > 0 && (
+          <PixelPanel material={m} behind={m.bg} style={pixel.card}>
+            <PixelText size="label" color={m.ink}>
+              Past weeks
+            </PixelText>
+            {history.map(reviewEntry)}
+          </PixelPanel>
+        )}
+      </>
+    );
+  };
 
   const renderCalendarStat = (label: string, value: string | number) => (
     <PixelPanel material={m} inset sunken bevel={BEVEL_THIN} style={pixel.statCell}>
@@ -922,11 +1148,15 @@ export default function HabitsTab() {
           {calendarDays.map((day, index) => {
             const selected = !!day && selectedDateKey === day.dateKey;
             const logged = !!day && day.completedHabitIds.length > 0;
+            // Days that haven't happened have no stats to drill into —
+            // date keys compare lexicographically, so > is "after today".
+            const future = !!day && day.dateKey > todayKey;
             return (
               <Pressable
                 key={index}
+                disabled={future}
                 onPress={() => day && setSelectedDateKey(day.dateKey)}
-                style={pixel.dayCell}
+                style={[pixel.dayCell, future && { opacity: 0.35 }]}
               >
                 {day ? (
                   <View
@@ -979,9 +1209,12 @@ export default function HabitsTab() {
               'Coins',
               state.dailyStats[selectedDayData.dateKey]?.coinsEarned ?? 0
             )}
+            {/* Replaced the boba-brewed count ("Made") — this calendar is the
+                Growth Hub's history, and whether you reflected is a habit
+                fact; how many cups the café brewed is café trivia. */}
             {renderCalendarStat(
-              'Made',
-              state.dailyStats[selectedDayData.dateKey]?.drinksMade ?? 0
+              'Reflected',
+              state.dailyStats[selectedDayData.dateKey]?.reflected ? 'Yes' : 'No'
             )}
             {renderCalendarStat(
               'Served',
@@ -1131,9 +1364,11 @@ export default function HabitsTab() {
       totalCoinsEarned += day.coinsEarned ?? 0;
       totalPearlsEarned += day.pearlsEarned ?? 0;
       if (day.missionCheckedIn) totalMissionCheckIns++;
+      if (day.reflected) totalReflections++;
     });
 
-    // Count reflections from dailyStats; fallback: at least 1 if reflectionLastClaimedDate is set
+    // Day records written before `reflected` existed can't be counted, but a
+    // save with a claim date on file has reflected at least once.
     if (state.reflectionLastClaimedDate && totalReflections === 0) totalReflections = 1;
 
     let longestStreak = 0;
@@ -1170,6 +1405,7 @@ export default function HabitsTab() {
       missionSet: !!state.mission.trim(),
       totalReflections,
       totalMissionCheckIns,
+      totalWeeklyReviews: state.weeklyReviews.length,
       // Filtered against the live catalogue: old saves still carry the retired
       // `cat-*` Market items, and counting those would hand out "Collector"
       // for a set the Market no longer sells.
@@ -1212,7 +1448,7 @@ export default function HabitsTab() {
 
   const handleClaimAchievement = (id: string, pearls: number) => {
     if (claimAchievement(id, pearls)) {
-      Alert.alert('Achievement claimed', `+${pearls} pearls`);
+      showToast(`Achievement claimed · ${pearlLabel(pearls)}`, ACCENTS.achievements);
     }
   };
 
@@ -1368,22 +1604,73 @@ export default function HabitsTab() {
     </>
   );
 
-  const renderResources = () => (
-    <>
-      {sectionHead('Resources', 'This page will hold self-help content later.')}
+  const renderResources = () => {
+    const daily = principleForDate(todayKey);
+    const dailySource = sourceOf(daily);
 
-      {['Books', 'Articles', 'Frameworks'].map((title) => (
-        <PixelPanel key={title} material={m} behind={m.bg} style={pixel.card}>
-          <PixelText size="label" color={m.ink}>
-            {title}
+    // A principle card, shared between the daily pick and the shelves. The
+    // "try it" button jumps into the section where the idea can actually be
+    // practised — a principle two taps from its practice is trivia.
+    const principleCard = (p: Principle, highlight = false) => (
+      <PixelPanel key={p.id} material={m} behind={m.bg} style={pixel.card}>
+        {highlight ? (
+          <PixelText size="small" color={ACCENT_INKS[p.accent]}>
+            TODAY'S PRINCIPLE
           </PixelText>
-          <PixelText size="small" color={m.inkDim} plain style={pixel.cardBody}>
-            Coming soon
+        ) : null}
+        <PixelText size="label" color={m.ink} style={highlight ? pixel.libTitle : undefined}>
+          {p.title}
+        </PixelText>
+        <PixelText size="small" color={m.inkDim} plain style={pixel.cardBody}>
+          {p.body}
+        </PixelText>
+        {highlight ? (
+          <PixelText size="small" color={m.inkDim} plain style={pixel.libSource}>
+            — {dailySource.book}, {dailySource.author}
           </PixelText>
-        </PixelPanel>
-      ))}
-    </>
-  );
+        ) : null}
+        {SECTION_KEYS.has(p.section) ? (
+          <PixelButton
+            material={m}
+            behind={m.face}
+            accent={ACCENTS[p.accent]}
+            onPress={() => setSection(p.section as HubSection)}
+            style={pixel.libTry}
+            contentStyle={pixel.libTryFace}
+          >
+            <PixelText size="small" color={m.ink}>
+              {p.tryIt} {'>'}
+            </PixelText>
+          </PixelButton>
+        ) : null}
+      </PixelPanel>
+    );
+
+    return (
+      <>
+        {sectionHead(
+          'Library',
+          'Borrowed ideas, kept because they work. Reading pays no pearls — the payout is leverage.'
+        )}
+
+        {principleCard(daily, true)}
+
+        {LIBRARY.map((shelf) => (
+          <View key={shelf.book} style={pixel.tierSection}>
+            <View style={pixel.rowBetween}>
+              <PixelText size="small" color={m.ink}>
+                {shelf.book}
+              </PixelText>
+              <PixelText size="small" color={m.inkDim}>
+                {shelf.author}
+              </PixelText>
+            </View>
+            {shelf.principles.map((p) => principleCard(p))}
+          </View>
+        ))}
+      </>
+    );
+  };
 
   // Held until the pixel font is in: swapping it in late reflows every label
   // and the numbers visibly jump, which on a screen this text-dense reads as a
@@ -1413,6 +1700,7 @@ export default function HabitsTab() {
         {section === 'habits' && renderHabits()}
         {section === 'mission' && renderMission()}
         {section === 'reflection' && renderReflection()}
+        {section === 'review' && renderReview()}
         {section === 'focus' && <FocusSection />}
         {section === 'calendar' && renderCalendar()}
         {section === 'todo' && renderTodo()}
@@ -1421,6 +1709,8 @@ export default function HabitsTab() {
 
         <View style={{ height: 30 }} />
       </ScrollView>
+
+      <PixelToast toast={toast} material={m} style={pixel.toast} />
     </SafeAreaView>
   );
 }
@@ -1575,6 +1865,59 @@ const pixel = StyleSheet.create({
   },
   dotCount: {
     marginLeft: PX * 2,
+  },
+  habitMeta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: PX * 2,
+  },
+  toast: {
+    position: 'absolute',
+    top: PX * 6,
+    left: 0,
+    right: 0,
+  },
+  libTitle: {
+    marginTop: PX * 2,
+  },
+  libSource: {
+    marginBottom: PX * 2,
+  },
+  libTry: {
+    alignSelf: 'flex-start',
+    marginTop: PX * 2,
+  },
+  libTryFace: {
+    paddingVertical: PX * 2,
+    paddingHorizontal: PX * 4,
+  },
+  ratingGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: PX * 3,
+    marginTop: PX * 3,
+    marginBottom: PX * 2,
+  },
+  ratingTile: {
+    width: '48%',
+  },
+  ratingFace: {
+    paddingVertical: PX * 3,
+    alignItems: 'center',
+  },
+  reviewEntry: {
+    padding: PX * 4,
+    marginTop: PX * 3,
+  },
+  reviewLine: {
+    marginTop: PX * 2,
+    lineHeight: 17,
+  },
+  unlog: {
+    width: PX * 8,
+    height: PX * 8,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 
   wideAction: {
