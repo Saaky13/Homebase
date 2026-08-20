@@ -174,7 +174,7 @@ on its own before the economy moves under it.
 
 ## Phase 2 — The payout rewrite
 
-Rip out the flat numbers in `CafeCanvas.serveFrontGroup`.
+Rip out the flat numbers in `CafeCanvas.serveFrontCat`.
 
 | Affinity | Coin mult | Popularity | Bond XP mult |
 |---|---|---|---|
@@ -188,9 +188,9 @@ coins = drink.baseCoins × affinityMult × cafeMultiplier × streakMult × bondT
 xp    = drink.pearls × affinityXpMult
 ```
 
-**Affinity is evaluated per cat, not per group.** One drop on a group of three
-returns three different multipliers. A mixed group is the hardest question the
-café asks, because no single recipe is right for all of them.
+**Affinity is evaluated per cat.** One cup is brewed and handed to one cat, so
+the question the café asks is per-customer: the line is mixed even when a group
+arrives together, and the cat at the front is the only one the cup can suit.
 
 **The combo streak** (`SERVE-INTERACTION.md` §8) multiplies coins only —
 ×1.2 / ×1.5 / ×2.0 at 3 / 6 / 10 consecutive favorite matches. It is ephemeral,

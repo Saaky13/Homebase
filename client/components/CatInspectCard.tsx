@@ -11,10 +11,10 @@ import {
 
 import { CatSprite } from './CatSprite';
 import { CupSprite } from './CupSprite';
-import { preferencesFor } from '../constants/affinity';
-import { DRINKS, type DrinkId } from '../constants/drinks';
+import { preferencesFor, serveOutcome } from '../constants/affinity';
+import { DRINKS, DRINK_INK, type DrinkId } from '../constants/drinks';
 import { RARITY_STYLE, type CatSpec } from '../constants/catSprites';
-import { bondProgress, patienceLabel, tipLabel } from '../constants/bonds';
+import { bondProgress, bondTip, patienceLabel, tipLabel } from '../constants/bonds';
 import { leavesAt, patienceLeft, type CafeCustomer } from '../constants/cafeVisit';
 import { colors } from '../constants/colors';
 
@@ -53,7 +53,7 @@ export const CARD_W = 268;
  * one. Sized for the common case — a full six likes and four dislikes — so
  * the card doesn't visibly jump on the frame after it opens.
  */
-export const CARD_H_ESTIMATE = 244;
+export const CARD_H_ESTIMATE = 262;
 export const CARD_GAP = 8;
 /** The card never comes closer than this to the edge of its container. */
 export const CARD_EDGE = 8;
@@ -129,46 +129,112 @@ export function anchorCard(
   return { x, y, pointerX, below };
 }
 
-/** The favourite, given its own row — it is the answer the tap asked for. */
-function HeroRow({ drink, onMenu }: { drink: DrinkId; onMenu: boolean }) {
-  const spec = DRINKS[drink];
+/**
+ * The three numbers a serve moves, in fixed columns so every row lines up and
+ * the section header can double as their legend.
+ *
+ * Colour carries which is which — gold coins, lavender pearls, plum bond XP,
+ * the same three the TopBar and the bond row already use — because three
+ * labelled figures per row on a 268px card is more ink than the card has.
+ * Only the pearls keep a symbol, since they are the one figure going *out*.
+ */
+function Figures({
+  coins,
+  pearls,
+  xp,
+  dim,
+}: {
+  coins: number;
+  pearls: number;
+  xp: number;
+  dim?: boolean;
+}) {
   return (
-    <View style={styles.hero}>
+    <>
+      <Text style={[styles.fCoins, dim && styles.fDim]}>+{coins}</Text>
+      <Text style={[styles.fPearls, dim && styles.fDim]}>{pearls}◆</Text>
+      <Text style={[styles.fXp, dim && styles.fDim]}>{xp > 0 ? `+${xp}` : '0'}</Text>
+    </>
+  );
+}
+
+/** The favourite, given its own row — it is the answer the tap asked for. */
+function HeroRow({
+  drink,
+  onMenu,
+  coins,
+  xp,
+  onPick,
+}: {
+  drink: DrinkId;
+  onMenu: boolean;
+  coins: number;
+  xp: number;
+  onPick?: () => void;
+}) {
+  const spec = DRINKS[drink];
+  // The card names the drink you should be pouring; making that name the
+  // button is the shortest path there is from "what does this cat want" to a
+  // loaded machine. Not on your menu means not pourable, so it stays inert.
+  const pickable = onMenu && !!onPick;
+
+  return (
+    <Pressable
+      onPress={pickable ? onPick : undefined}
+      disabled={!pickable}
+      style={({ pressed }) => [styles.hero, pressed && pickable && styles.heroPressed]}
+    >
       <CupSprite drink={drink} width={20} />
-      <Text style={styles.heroName} numberOfLines={1}>
+      <Text style={[styles.heroName, { color: DRINK_INK[spec.rarity] }]} numberOfLines={1}>
         {spec.name}
       </Text>
       {/* Being told, on a cat standing in front of you, that its favourite is
           something you can't pour is the strongest pull toward the machine
           in the app. It also teaches what the dimmed rows below mean. */}
       {!onMenu && <Text style={styles.heroMissing}>not on your menu</Text>}
-      <Text style={styles.heroCost}>{spec.pearls}◆</Text>
-    </View>
+      {pickable && <Text style={styles.heroLoad}>LOAD</Text>}
+      <Figures coins={coins} pearls={spec.pearls} xp={xp} dim={!onMenu} />
+    </Pressable>
   );
 }
 
-/** One drink in a column: tiny cup, short name, pearl cost. */
+/** One drink on the list: tiny cup, name, and what serving it would move. */
 function DrinkRow({
   drink,
-  dim,
+  coins,
+  xp,
   locked,
+  onPick,
 }: {
   drink: DrinkId;
-  /** A disliked drink, drawn back so the likes read first. */
-  dim?: boolean;
+  coins: number;
+  xp: number;
   /** Not on the player's menu. */
   locked?: boolean;
+  /** Load this one into the machine. Absent on rows that can't be poured. */
+  onPick?: () => void;
 }) {
   const spec = DRINKS[drink];
+  const pickable = !locked && !!onPick;
+
   return (
-    <View style={[styles.row, (dim || locked) && styles.rowDim]}>
+    <Pressable
+      onPress={pickable ? onPick : undefined}
+      disabled={!pickable}
+      style={({ pressed }) => [
+        styles.row,
+        locked && styles.rowDim,
+        pressed && pickable && styles.rowPressed,
+      ]}
+    >
       <CupSprite drink={drink} width={13} />
-      <Text style={[styles.rowName, dim && styles.rowNameDim]} numberOfLines={1}>
-        {spec.short}
+      {/* The name carries the rarity — no chip, no second line. A row is
+          15px tall and this is the only channel it has spare. */}
+      <Text style={[styles.rowName, { color: DRINK_INK[spec.rarity] }]} numberOfLines={1}>
+        {spec.name}
       </Text>
-      {/* Dislikes never get poured, so their price is noise — omitted. */}
-      {!dim && <Text style={styles.rowCost}>{locked ? '–' : `${spec.pearls}◆`}</Text>}
-    </View>
+      <Figures coins={coins} pearls={spec.pearls} xp={xp} dim={locked} />
+    </Pressable>
   );
 }
 
@@ -286,8 +352,30 @@ function BondRow({ cat, xp }: { cat: CatSpec; xp: number }) {
   );
 }
 
-function Section({ label, tint }: { label: string; tint: string }) {
-  return <Text style={[styles.section, { color: tint }]}>{label}</Text>;
+function Section({
+  label,
+  tint,
+  figures,
+}: {
+  label: string;
+  tint: string;
+  /**
+   * Head the three figure columns beneath. The section label is the only spare
+   * line on the card, so it doubles as the legend — otherwise each row would
+   * have to carry its own labels, which is three times the ink for a fact that
+   * only needs saying once per list.
+   */
+  figures?: boolean;
+}) {
+  if (!figures) return <Text style={[styles.section, { color: tint }]}>{label}</Text>;
+  return (
+    <View style={styles.sectionRow}>
+      <Text style={[styles.section, styles.sectionGrow, { color: tint }]}>{label}</Text>
+      <Text style={[styles.legend, styles.fCoins]}>coins</Text>
+      <Text style={[styles.legend, styles.fPearls]}>cost</Text>
+      <Text style={[styles.legend, styles.fXp]}>bond</Text>
+    </View>
+  );
 }
 
 export default function CatInspectCard({
@@ -300,6 +388,7 @@ export default function CatInspectCard({
   flip,
   onHeight,
   onOpenAlmanac,
+  onPickDrink,
 }: {
   cat: CatSpec;
   /** The player's menu, so a row can say whether it can be brewed. */
@@ -320,12 +409,25 @@ export default function CatInspectCard({
   onHeight: (h: number) => void;
   /** Jump to this cat's full entry in the almanac. */
   onOpenAlmanac: () => void;
+  /**
+   * Load a drink into the machine. Only ever called with something on the
+   * player's menu — a locked row has nothing to load. Omitted by the town map,
+   * where there is no machine to load into and the card is read-only.
+   */
+  onPickDrink?: (drink: DrinkId) => void;
 }) {
   const rarity = RARITY_STYLE[cat.rarity];
   const prefs = preferencesFor(cat);
   const owns = (id: DrinkId) => recipes.includes(id);
 
   const dislikes = prefs.dislikes.slice(0, MAX_DISLIKES);
+
+  // What each drink is actually worth *to this cat, right now*. The tip is
+  // read once from the bond the cat walked in with, which is the same figure
+  // the till will use when the cup is handed over (convention 19) — the card
+  // would be lying if it quoted a rate the serve doesn't pay.
+  const tip = bondTip(bondXp, cat.rarity);
+  const payout = (id: DrinkId) => serveOutcome(cat, id, { bondTip: tip });
   const handleLayout = (e: LayoutChangeEvent) => onHeight(e.nativeEvent.layout.height);
 
   return (
@@ -365,28 +467,37 @@ export default function CatInspectCard({
 
       <BondRow cat={cat} xp={bondXp} />
 
-      <Section label="LOVES" tint={colors.accentBlush} />
-      <HeroRow drink={prefs.favorite} onMenu={owns(prefs.favorite)} />
+      <Section label="LOVES" tint={colors.accentBlush} figures />
+      <HeroRow
+        drink={prefs.favorite}
+        onMenu={owns(prefs.favorite)}
+        coins={payout(prefs.favorite).coins}
+        xp={payout(prefs.favorite).xp}
+        onPick={onPickDrink && (() => onPickDrink(prefs.favorite))}
+      />
 
-      {/* Likes and dislikes side by side — the wide card's whole trick. Six
-          likes stacked next to four dislikes is half the height of the same
-          ten drinks in one column, and the hairline keeps the two lists from
-          reading as one. */}
-      <View style={styles.columns}>
-        <View style={styles.col}>
-          <Section label="LIKES" tint={colors.accentTeal} />
-          {prefs.likes.map((id) => (
-            <DrinkRow key={id} drink={id} locked={!owns(id)} />
-          ))}
-        </View>
-        <View style={styles.colRule} />
-        <View style={styles.col}>
-          <Section label="WON'T DRINK" tint={colors.mediumGray} />
-          {dislikes.map((id) => (
-            <DrinkRow key={id} drink={id} dim />
-          ))}
-        </View>
-      </View>
+      {/* One column, not two. The side-by-side split existed to keep the card
+          short, and it cost each list about 120px of width — enough for a name
+          and a price, and nowhere near enough for the three figures a serve
+          actually moves. Full width buys those columns back; the dislikes give
+          up their rows to pay for it, which costs nothing because a drink this
+          cat won't touch has no payout worth tabulating. */}
+      <Section label="LIKES" tint={colors.accentTeal} figures />
+      {prefs.likes.map((id) => (
+        <DrinkRow
+          key={id}
+          drink={id}
+          coins={payout(id).coins}
+          xp={payout(id).xp}
+          locked={!owns(id)}
+          onPick={onPickDrink && (() => onPickDrink(id))}
+        />
+      ))}
+
+      <Section label="WON'T DRINK" tint={colors.mediumGray} />
+      <Text style={styles.dislikeLine} numberOfLines={2}>
+        {dislikes.map((id) => DRINKS[id].short).join('  ·  ')}
+      </Text>
 
       {/* Both tails are rendered and cross-faded, because which one shows has
           to change from inside a render loop that never re-renders React —
@@ -490,6 +601,18 @@ const styles = StyleSheet.create({
   patienceLeft: { fontSize: 9, fontWeight: '900', color: colors.brown700 },
   patienceLeftLow: { color: colors.coral },
 
+  // Same `gap` as a drink row, so the legend's right-aligned columns land
+  // exactly over the figures they name. Its own margins replace the label's,
+  // which would otherwise push the label off the legend's baseline.
+  sectionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: 6,
+    marginBottom: 3,
+  },
+  sectionGrow: { flex: 1, marginTop: 0, marginBottom: 0 },
+  legend: { fontSize: 7, fontWeight: '800', letterSpacing: 0.3, opacity: 0.7 },
   section: {
     fontSize: 8,
     fontWeight: '800',
@@ -503,6 +626,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 6,
     paddingVertical: 3,
+    // Bleeds into the card's own padding by exactly what it pads back, so the
+    // plate reads as a highlighted band while its three figures land in the
+    // same columns as every row below it. Inset only on the left and the
+    // legend above would point at nothing.
+    marginHorizontal: -6,
     paddingHorizontal: 6,
     borderRadius: 8,
     backgroundColor: 'rgba(248,241,231,0.85)',
@@ -519,24 +647,17 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: colors.accentBlush,
   },
-  heroCost: {
-    marginLeft: 'auto',
-    fontSize: 10,
+  heroPressed: { backgroundColor: colors.cream },
+  // Says the row is a button without adding a second control to the line. It
+  // sits where "not on your menu" sits, because the two are the same slot's
+  // two answers: you can pour this, or you can't.
+  heroLoad: {
+    flex: 1,
+    fontSize: 8,
     fontWeight: '800',
-    color: colors.lavender,
+    letterSpacing: 0.6,
+    color: colors.accentTeal,
   },
-
-  columns: { flexDirection: 'row' },
-  col: { flex: 1 },
-  colRule: {
-    width: 1,
-    backgroundColor: 'rgba(233,209,183,0.7)',
-    marginHorizontal: 8,
-    marginTop: 6,
-  },
-
-  // `short` names are authored to fit a cell this wide next to a small cup;
-  // the full names are not.
   row: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -544,9 +665,26 @@ const styles = StyleSheet.create({
     height: 15,
   },
   rowDim: { opacity: 0.45 },
+  rowPressed: { opacity: 0.55 },
   rowName: { flex: 1, fontSize: 9, fontWeight: '700', color: colors.darkBrown },
-  rowNameDim: { color: colors.mediumGray },
-  rowCost: { fontSize: 8, fontWeight: '700', color: colors.mediumGray },
+
+  // The three figure columns. Fixed widths, right-aligned: the numbers are
+  // meant to be compared down the list, and a flexed column puts every row's
+  // digits in a different place. Same three inks as the serve receipt, so a
+  // number quoted here and a number floating off a served cat read as the
+  // same number.
+  fCoins: { width: 30, textAlign: 'right', fontSize: 9, fontWeight: '800', color: '#7A5418' },
+  fPearls: { width: 26, textAlign: 'right', fontSize: 9, fontWeight: '800', color: '#6B52A8' },
+  fXp: { width: 28, textAlign: 'right', fontSize: 9, fontWeight: '800', color: '#8A4A67' },
+  fDim: { color: colors.mediumGray },
+
+  dislikeLine: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: colors.mediumGray,
+    marginTop: 1,
+    marginBottom: 2,
+  },
 
   /**
    * A square turned 45°, half-buried in the card's edge, so the two borders

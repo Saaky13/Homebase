@@ -680,8 +680,8 @@ spots — is in design units and converted through `scale`/`offsetX`.
 
 **The static room is cached.** `drawCafeScene` is recorded once into an
 `SkPicture` (re-recorded only when upgrades, palette or room height change) and
-replayed with `drawPicture` each frame; only cats, drinks, want-bubbles and the
-drag target are painted per frame.
+replayed with `drawPicture` each frame; only cats, drinks and the drag target
+are painted per frame.
 
 ### Pixel art (cafePixel.ts + cafePalette.ts)
 
@@ -765,9 +765,10 @@ be there" true.
 
 **Where you read it: the inspect card, not the floor.** Tapping a queueing cat
 opens `CatInspectCard` with a `PATIENCE` row directly above its bond — how long
-you have to decide, then what the decision is worth. It was briefly a bar over
-the cat's want bubble; nine of them at once read as a room full of alarm, where
-the whole point is that most of the queue is fine and one cat isn't. The row
+you have to decide, then what the decision is worth. It was briefly a bar drawn over the cat
+itself; nine of them at once read as a room full of alarm, where the whole
+point is that most of the queue is fine and one cat isn't. It is the same
+reason the want bubble went — the floor is not where per-cat detail belongs. The row
 ticks itself on an interval it owns (the card is deliberately never re-rendered
 by either canvas's loop) — 10s normally and 250ms inside the last quarter hour,
 because four ticks a second across a three-hour window is forty thousand
@@ -1506,10 +1507,19 @@ card (level of 5, tip label, progress to the next); and the collection grid in
 `app/cats/index.tsx`.
 
 **What the café pays today.** The serve in `CafeCanvas` is
-`addCoins(Math.round(25 * (1 + tip)))` — the flat 25 base with the tip applied,
-not `serveOutcome().coins`. `serveOutcome` already accepts a `bondTip` option
-for when the drink economy takes over the coin payout; until it does, the tip
-is grafted onto the old flat rate rather than the menu price.
+`serveOutcome(spec, drink, { bondTip: tip }).coins` — the drink's own base
+coins, times what this cat thinks of it, times the tip. It used to be a flat
+`25 * (1 + tip)`, which meant affinity moved bond XP but never money.
+
+It changed because the brew machine's menu quotes the arithmetic to the coin.
+A payout preview that names a number the till does not pay is worse than no
+preview, so the preview and the serve read the same function. Same rule as
+`PayoutBadge`, which dropped its popularity line for failing it: **popularity
+is still the flat `addDrinkServed(1)`, not `serveOutcome().popularity`**, so
+neither the badge nor the menu panel mentions popularity at all. Routing it
+through affinity is a separate change, and one that has to pick a single path
+— `addDrinkServed` already applies the café multiplier and `serveOutcome`
+does not, so doing both double-counts.
 
 ---
 

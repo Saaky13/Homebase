@@ -266,6 +266,23 @@ export const DRINK_FRAME: Record<Rarity, string> = {
   ultra: '#F2A6D8',
 };
 
+/**
+ * The same five rarities at text weight, for a drink's *name*.
+ *
+ * `DRINK_FRAME` can't do this job: those are frames, pitched pale enough to
+ * ring a card on cream, and pale is exactly wrong for 9pt type. These are the
+ * same five hues taken down to something readable on the app's warm grounds —
+ * so a name says its rarity without a chip, a badge or a second line, which is
+ * all the room a card row has.
+ */
+export const DRINK_INK: Record<Rarity, string> = {
+  common: '#6E5744',
+  rare: '#2F6FA8',
+  epic: '#6B4FC4',
+  legendary: '#A8760B',
+  ultra: '#C0397F',
+};
+
 /* --------------------------- palette generation ------------------------ */
 
 function clamp01(n: number): number {

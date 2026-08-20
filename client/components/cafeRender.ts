@@ -14,8 +14,10 @@
 
 import { getTableCenters } from './cafeConfig';
 import type { Ctx2D } from './skiaCanvas2d';
-import { PixelPainter, noise, PX } from './cafePixel';
+import { PixelPainter, noise, PX, snap } from './cafePixel';
+import { drinkCupAspect, getDrinkCupSkImage } from './drinkCupImageCache';
 import type { CafePalette } from '../constants/cafePalette';
+import { DRINKS, DRINK_FRAME, type DrinkId } from '../constants/drinks';
 
 /* --------------------------- scene geometry ---------------------------- */
 
@@ -25,8 +27,14 @@ export const FLOOR_TOP = 214;
 export const COUNTER_TOP = 150;
 const COUNTER_BOTTOM = 206;
 
-/** The tray the draggable boba cup rests on, in design-space coordinates. */
-export const CUP_STATION = { x: 195, y: 132 };
+/**
+ * Where the draggable cup rests, in design-space coordinates — directly under
+ * the brew machine's spout. It used to sit dead centre at x 195, which is also
+ * where the queue forms; the machine needs that space for its face, and a cup
+ * standing off to one side makes the drag to a cat a deliberate movement rather
+ * than a straight drop down the middle.
+ */
+export const CUP_STATION = { x: 276, y: 146 };
 
 export interface CafeScene {
   width: number;
@@ -299,12 +307,18 @@ function drawWall(p: PixelPainter, scene: CafeScene) {
 
   drawWindow(p, 16, 20, 118, 68, scene);
   drawWindow(p, width - 134, 20, 118, 68, scene);
-  drawMenuBoard(p, 150, 16, 90, 72, pal);
 
-  // The lower wall is the only clear band left, between the jars and the
-  // register, so the shop's wall art hangs there.
+  // The board hangs *above* the brew machine now rather than filling the whole
+  // gap between the windows — menu up top, equipment below it, which is how a
+  // counter actually reads. It lost its bottom half and one menu line to make
+  // room; the machine is the thing you look at.
+  drawMenuBoard(p, 152, 12, 92, 44, pal);
+
+  // One picture, in the only pocket of wall the machine left clear: right of
+  // its spout, above the counter, left of the register. This used to be three
+  // small frames across the lower wall, which is now equipment the whole way.
   if (scene.hasArt) {
-    [200, 236, 272].forEach((fx, i) => drawFramedArt(p, fx, 110, 30, i, pal));
+    drawFramedArt(p, 302, 92, 28, 1, pal);
   }
 
   if (scene.hasLights) {
@@ -414,24 +428,18 @@ function drawMenuBoard(
   p.rect(x, y, w, h, pal.board);
 
   // Header, underlined.
-  p.rect(x + 16, y + 10, w - 32, 5, pal.chalk);
-  p.rect(x + 10, y + 20, w - 20, 2, pal.chalkDim);
+  p.rect(x + 16, y + 7, w - 32, 5, pal.chalk);
+  p.rect(x + 10, y + 15, w - 20, 2, pal.chalkDim);
 
-  // Menu lines: a price column on the right of each.
-  const lines = [0.62, 0.5, 0.7, 0.44];
+  // Menu lines: a price column on the right of each. Three, not four — the
+  // board is half the height it was and a squeezed fourth line just read as
+  // noise at this size.
+  const lines = [0.62, 0.5, 0.7];
   lines.forEach((frac, i) => {
-    const ly = y + 30 + i * 10;
+    const ly = y + 22 + i * 8;
     p.rect(x + 10, ly, (w - 30) * frac, 3, pal.chalkDim);
     p.rect(x + w - 18, ly, 8, 3, pal.chalk);
   });
-
-  // A little chalk boba cup in the corner.
-  const cx = x + w - 18;
-  const cy = y + h - 16;
-  p.rect(cx - 5, cy - 8, 10, 2, pal.chalk);
-  p.rect(cx - 4, cy - 6, 8, 10, pal.chalk);
-  p.rect(cx - 3, cy, 6, 3, pal.chalkDim);
-  p.rect(cx + 1, cy - 12, 2, 6, pal.chalk);
 }
 
 /** Three small frames, each with a different scrap of a picture inside. */
@@ -595,8 +603,12 @@ function drawCounter(p: PixelPainter, scene: CafeScene) {
   p.rect(x, COUNTER_BOTTOM, w, 5, pal.shadow);
   p.rect(0, COUNTER_BOTTOM + 5, width, 3, pal.softShadow);
 
-  drawEspressoMachine(p, 34, COUNTER_TOP, pal);
-  drawBobaJars(p, 128, COUNTER_TOP, scene);
+  // Left to right: jars, espresso, then the 102-wide gap the brew machine
+  // stands in (148-250, drawn per-frame — see `drawBrewMachine`), the cup
+  // under its spout, and the register. The jars and the espresso machine both
+  // moved left to open that gap; they used to sit at 128 and 34.
+  drawBobaJars(p, 12, COUNTER_TOP, scene);
+  drawEspressoMachine(p, 74, COUNTER_TOP, pal);
   drawRegister(p, width - 62, COUNTER_TOP, pal);
   drawCupStation(p, CUP_STATION.x, COUNTER_TOP, pal);
 }
@@ -732,27 +744,32 @@ function drawRegister(p: PixelPainter, x: number, topY: number, pal: CafePalette
 }
 
 /**
- * Where the draggable cup rests. Only the tray and a stack of spares are
- * painted — the cup you actually drag is a real view on top of the canvas, so
- * it gets touch handling for free.
+ * The drip tray the draggable cup stands on, under the machine's spout. The cup
+ * you actually drag is a real view on top of the canvas, so it gets touch
+ * handling for free — only the tray and the counter clutter beside it are
+ * painted here.
+ *
+ * This used to be a wooden tray dead centre with a straw jar and a stack of
+ * spares around it. The machine now occupies that space, so the tray became a
+ * proper grated drip tray (which is what sits under a dispenser) and the
+ * clutter moved right, into the gap before the register.
  */
 function drawCupStation(p: PixelPainter, cx: number, topY: number, pal: CafePalette) {
-  p.rect(cx - 26, topY - 6, 52, 6, pal.woodDk);
-  p.rect(cx - 26, topY - 6, 52, 2, pal.woodLt);
+  // Grated drip tray. The slots are what make it read as draining rather than
+  // as another wooden board.
+  p.rect(cx - 17, topY - 8, 34, 8, pal.metalDk);
+  p.rect(cx - 15, topY - 6, 30, 4, pal.metal);
+  for (let gx = cx - 13; gx < cx + 13; gx += 5) p.rect(gx, topY - 6, 3, 4, pal.metalDk);
+  p.rect(cx - 17, topY - 8, 34, 2, pal.metalLt);
 
-  // Spare cups stacked beside the tray.
+  // Spare cups, stacked in the clear stretch before the register. The straw jar
+  // that used to stand beside them is gone: the machine took its space, and the
+  // only remaining gap is narrower than the jar.
+  const sx = cx + 26;
   for (let i = 0; i < 3; i++) {
-    p.rect(cx + 14 - i, topY - 14 - i * 4, 14 + i * 2, 5, pal.cream);
-    p.rect(cx + 14 - i, topY - 14 - i * 4, 14 + i * 2, 2, pal.slabLt);
+    p.rect(sx - i, topY - 14 - i * 4, 14 + i * 2, 5, pal.cream);
+    p.rect(sx - i, topY - 14 - i * 4, 14 + i * 2, 2, pal.slabLt);
   }
-
-  // Straw jar.
-  p.rect(cx - 26, topY - 26, 12, 20, pal.skyLt);
-  p.rect(cx - 26, topY - 26, 12, 20, pal.slabDk);
-  p.rect(cx - 24, topY - 24, 8, 18, pal.skyLt);
-  [pal.berry, pal.mint, pal.gold].forEach((c, i) => {
-    p.rect(cx - 23 + i * 3, topY - 32, 2, 10, c);
-  });
 }
 
 /* -------------------------------- tables ------------------------------- */
@@ -896,24 +913,327 @@ export function drawServeTarget(ctx: Ctx2D, x: number, y: number, pal: CafePalet
   p.ellipse(x, y, 20, 7, pal.gold);
 }
 
+/* ---------------------------- the brew machine -------------------------- */
+
 /**
- * A thought bubble over a waiting cat's head, so the queue reads as *wanting*
- * something rather than just standing there.
+ * Machine geometry, in design units. Exported because `CafeCanvas` hit-tests
+ * against it: taps on a preset, the menu tab and the dispense button all resolve
+ * here, so the art and the touch targets cannot drift apart the way the seat
+ * spots and the chairs once did.
+ *
+ * The body stands on the counter at 148-250 and the cup sits under the spout to
+ * its right. Everything on the face is clear of the cup, which reaches up to
+ * design y ~112 — the controls stop at 110 for exactly that reason.
  */
-export function drawWantBubble(ctx: Ctx2D, x: number, y: number, pal: CafePalette) {
+export const BREW_MACHINE = {
+  x: 148,
+  y: 62,
+  w: 102,
+  h: 90,
+  lamp: { cx: 236, cy: 69, r: 5 },
+  presets: [
+    { x: 154, y: 80, w: 24, h: 30 },
+    { x: 181, y: 80, w: 24, h: 30 },
+    { x: 208, y: 80, w: 24, h: 30 },
+  ],
+  menuTab: { x: 234, y: 80, w: 12, h: 30 },
+  gauge: { x: 154, y: 116, w: 92, h: 10 },
+  button: { x: 154, y: 130, w: 92, h: 16 },
+  /** Nozzle tip, where the pour lands and the steam rises from. */
+  spoutTip: { x: 276, y: 108 },
+} as const;
+
+export interface BrewPreset {
+  id: DrinkId;
+  /** Greyed when the player cannot pay for it. Brewing is free; the drop isn't. */
+  affordable: boolean;
+}
+
+export interface BrewMachineView {
+  pal: CafePalette;
+  presets: BrewPreset[];
+  /** Index into `presets` of the loaded recipe, or -1 when the sheet holds it. */
+  selectedIndex: number;
+  /** Lit when someone is waiting. With an empty queue the machine reads as off. */
+  ready: boolean;
+  /** 0-1. How far the hold has filled the gauge. */
+  fill: number;
+  /** Dispense button held down. */
+  pressed: boolean;
+  /** Body shake while the machine hums, in design units. Usually -1, 0 or 1. */
+  shake: number;
+  /** 0-1 across the puff window after a brew lands. At 0 no steam is drawn. */
+  steam: number;
+}
+
+/**
+ * The machine, drawn per frame rather than into the cached scene.
+ *
+ * Almost everything on its face is live — the lamp tracks the queue, the gauge
+ * tracks a hold, the presets track what you own, and the whole body shakes while
+ * it runs. Caching the shell and overlaying the rest would mean re-recording the
+ * room picture on every one of those, so the machine pays its ~120 rects a frame
+ * instead. That is noise next to the several thousand the room costs, which is
+ * why the room is the thing that gets cached.
+ */
+export function drawBrewMachine(ctx: Ctx2D, m: BrewMachineView) {
   const p = new PixelPainter(ctx);
+  const { pal } = m;
+  const M = BREW_MACHINE;
+  const dx = m.shake;
+  const x = M.x + dx;
+  const y = M.y;
 
-  p.rect(x - 4, y + 14, 4, 4, pal.cream);
-  p.rect(x - 2, y + 9, 5, 5, pal.cream);
-  p.softRect(x - 13, y - 9, 26, 20, pal.cream, PX * 2);
-  p.softRectEdge(x - 13, y - 9, 26, 20, PX, pal.slabDk);
+  drawMachineSpout(p, dx, pal, m.ready);
 
-  // A tiny boba cup inside the bubble.
-  p.rect(x - 4, y - 5, 8, 11, pal.slabDk);
-  p.rect(x - 3, y - 4, 6, 9, pal.classic);
-  p.rect(x - 3, y - 4, 6, 3, pal.cream);
-  p.rect(x - 3, y + 2, 2, 2, pal.pearl);
-  p.rect(x, y + 2, 2, 2, pal.pearl);
-  p.rect(x - 5, y - 7, 10, 2, pal.cream);
-  p.rect(x + 1, y - 11, 2, 5, pal.berry);
+  // Shell. The wood cap is what keeps it from reading as a fridge — every other
+  // warm object in the room has a wooden top.
+  p.rect(x - 2, y + 6, M.w + 4, M.h - 6, pal.metalDk);
+  p.rect(x, y + 8, M.w, M.h - 12, pal.metal);
+  p.rect(x, y + 8, M.w, 3, pal.metalLt);
+  p.rect(x, y + M.h - 10, M.w, 4, pal.metalDk);
+
+  // Wood side posts. Without them the machine is a grey box standing next to
+  // the espresso machine's grey box, and the two read as one long metal band
+  // across the counter. Framing it top, sides and plinth in wood is what makes
+  // it a separate piece of furniture rather than more of the same appliance.
+  p.rect(x - 4, y + 6, 6, M.h - 6, pal.woodDk);
+  p.rect(x + M.w - 2, y + 6, 6, M.h - 6, pal.woodDk);
+  p.rect(x - 4, y + 6, 2, M.h - 6, pal.woodLt);
+  p.rect(x + M.w + 2, y + 6, 2, M.h - 6, pal.woodDkr);
+
+  // Cap.
+  p.rect(x - 4, y, M.w + 8, 12, pal.woodDk);
+  p.rect(x - 4, y, M.w + 8, 3, pal.woodLt);
+  p.rect(x - 2, y + 10, M.w + 4, 2, pal.woodDkr);
+
+  drawMachineLamp(p, dx, pal, m.ready);
+
+  // Recessed face the controls sit in.
+  p.rect(x + 4, y + 16, M.w - 8, M.h - 28, pal.metalDk);
+  p.rect(x + 5, y + 17, M.w - 10, M.h - 30, pal.metal);
+
+  m.presets.forEach((preset, i) => {
+    const cell = M.presets[i];
+    if (!cell) return;
+    drawPresetCell(p, ctx, cell, dx, preset, i === m.selectedIndex, pal);
+  });
+  for (let i = m.presets.length; i < M.presets.length; i++) {
+    drawEmptyCell(p, M.presets[i], dx, pal);
+  }
+
+  drawMenuTab(p, dx, pal);
+  drawGauge(p, dx, m.fill, m.ready, pal);
+  drawDispenseButton(p, dx, m.pressed, m.ready, pal);
+
+  // Plinth, and the shadow the machine throws down the backsplash.
+  p.rect(x - 4, y + M.h - 6, M.w + 8, 6, pal.woodDkr);
+  p.rect(x - 4, y + M.h - 6, M.w + 8, 2, pal.woodDk);
+  p.rect(x + M.w + 4, y + 8, 3, M.h - 8, pal.softShadow);
+
+  if (m.steam > 0) drawBrewSteam(p, m.steam, pal);
+}
+
+/**
+ * The readiness tell. Lit warm when there is someone to brew for, dark when
+ * there is not — a machine with its power light off is not broken, it is off,
+ * which is the whole reason the dispense button is allowed to refuse.
+ */
+function drawMachineLamp(p: PixelPainter, dx: number, pal: CafePalette, ready: boolean) {
+  const { cx, cy, r } = BREW_MACHINE.lamp;
+  const x = cx + dx;
+
+  // Bezel.
+  p.ellipse(x, cy, r + 2, r + 2, pal.woodDkr);
+
+  if (!ready) {
+    p.ellipse(x, cy, r, r, pal.metalDk);
+    p.ellipse(x, cy - 1, r - 2, r - 2, pal.metal);
+    return;
+  }
+
+  p.ellipse(x, cy, r + 4, r + 4, pal.softShadow);
+  p.ellipse(x, cy, r, r, pal.goldDk);
+  p.ellipse(x, cy, r - 1, r - 1, pal.gold);
+  p.ellipse(x, cy - 1, r - 3, r - 3, pal.bulbGlow);
+}
+
+/** One preset well with a cup standing in it, framed by the drink's rarity. */
+function drawPresetCell(
+  p: PixelPainter,
+  ctx: Ctx2D,
+  cell: { x: number; y: number; w: number; h: number },
+  dx: number,
+  preset: BrewPreset,
+  selected: boolean,
+  pal: CafePalette
+) {
+  const x = cell.x + dx;
+  const spec = DRINKS[preset.id];
+  const frame = preset.affordable ? DRINK_FRAME[spec.rarity] : pal.metalDk;
+
+  // Sunken well, then the rarity frame around its mouth.
+  p.rect(x, cell.y, cell.w, cell.h, pal.metalDk);
+  p.rect(x + 2, cell.y + 2, cell.w - 4, cell.h - 4, pal.dark);
+  p.softRectEdge(x, cell.y, cell.w, cell.h, PX, frame);
+
+  // The cup. A selected preset lifts, the same tell the rail cells used.
+  const lift = selected ? 3 : 0;
+  const cupW = 16;
+  const cupH = cupW * drinkCupAspect(preset.id);
+  const image = getDrinkCupSkImage(preset.id, 0);
+  if (image) {
+    ctx.drawImage(
+      image,
+      snap(x + (cell.w - cupW) / 2),
+      snap(cell.y + cell.h - 5 - cupH - lift),
+      cupW,
+      cupH
+    );
+  }
+
+  // Unaffordable recipes wash out rather than vanish — you still want to see
+  // what you are saving toward.
+  if (!preset.affordable) {
+    p.rect(x + 2, cell.y + 2, cell.w - 4, cell.h - 4, 'rgba(40,28,20,0.45)');
+  }
+
+  if (selected) {
+    p.rect(x + 3, cell.y + cell.h - 4, cell.w - 6, 2, pal.gold);
+    p.rect(x + 3, cell.y + cell.h - 2, cell.w - 6, 1, pal.goldDk);
+  }
+}
+
+/** A preset slot nothing has been used in yet. */
+function drawEmptyCell(
+  p: PixelPainter,
+  cell: { x: number; y: number; w: number; h: number },
+  dx: number,
+  pal: CafePalette
+) {
+  const x = cell.x + dx;
+  p.rect(x, cell.y, cell.w, cell.h, pal.metalDk);
+  p.rect(x + 2, cell.y + 2, cell.w - 4, cell.h - 4, pal.dark);
+  p.rect(x + 8, cell.y + cell.h / 2 - 1, cell.w - 16, 2, pal.metalDk);
+}
+
+/** The tab that opens the full menu. Three bars — the universal "more" mark. */
+function drawMenuTab(p: PixelPainter, dx: number, pal: CafePalette) {
+  const t = BREW_MACHINE.menuTab;
+  const x = t.x + dx;
+
+  p.rect(x, t.y, t.w, t.h, pal.woodDk);
+  p.rect(x + 1, t.y + 1, t.w - 2, t.h - 2, pal.wood);
+  p.rect(x + 1, t.y + 1, t.w - 2, 2, pal.woodLt);
+
+  for (let i = 0; i < 3; i++) {
+    p.rect(x + 3, t.y + 9 + i * 4, t.w - 6, 2, pal.woodDkr);
+  }
+}
+
+/**
+ * The hold gauge. Fills strictly linearly — an eased gauge reads as lying about
+ * how much longer you have to hold, and this is not a timing game.
+ */
+function drawGauge(p: PixelPainter, dx: number, fill: number, ready: boolean, pal: CafePalette) {
+  const g = BREW_MACHINE.gauge;
+  const x = g.x + dx;
+
+  // Sunken well.
+  p.rect(x, g.y, g.w, g.h, pal.metalDk);
+  p.rect(x + 1, g.y + 1, g.w - 2, g.h - 2, pal.dark);
+
+  const clamped = Math.max(0, Math.min(1, fill));
+  if (clamped > 0) {
+    const w = Math.max(PX, (g.w - 4) * clamped);
+    p.rect(x + 2, g.y + 2, w, g.h - 4, pal.goldDk);
+    p.rect(x + 2, g.y + 2, w, 2, pal.gold);
+    // A brighter head on the fill, so the eye tracks the edge that is moving.
+    p.rect(x + 2 + w - 3, g.y + 2, 3, g.h - 4, pal.bulb);
+  }
+
+  // Quarter ticks along the top lip. They mark the run, they are not targets.
+  const tick = ready ? pal.metal : pal.metalDk;
+  for (let i = 1; i < 4; i++) p.rect(x + (g.w * i) / 4, g.y - 2, PX, 2, tick);
+}
+
+/**
+ * The dispense button. Presses instantly by the full bevel and inverts it —
+ * pixel UI has no sub-pixel positions to ease through, the same rule the hub's
+ * `PixelButton` follows.
+ */
+function drawDispenseButton(
+  p: PixelPainter,
+  dx: number,
+  pressed: boolean,
+  ready: boolean,
+  pal: CafePalette
+) {
+  const b = BREW_MACHINE.button;
+  const x = b.x + dx;
+  const drop = pressed ? 3 : 0;
+
+  // Recess the button sits in.
+  p.rect(x, b.y, b.w, b.h + 3, pal.metalDk);
+  p.rect(x + 1, b.y + 1, b.w - 2, b.h + 1, pal.dark);
+
+  const y = b.y + 2 + drop;
+  const face = ready ? pal.berry : pal.metal;
+  const lt = ready ? pal.pink : pal.metalLt;
+  const dk = ready ? pal.seatDk : pal.metalDk;
+
+  p.rect(x + 2, y, b.w - 4, b.h - 3, dk);
+  p.rect(x + 2, y, b.w - 4, b.h - 5, face);
+  p.rect(x + 2, y, b.w - 4, 2, pressed ? dk : lt);
+
+  // Grip ridges across the face, so it reads as something to push rather than
+  // a coloured panel.
+  for (let i = 0; i < 5; i++) {
+    p.rect(x + 22 + i * 12, y + 3, 4, b.h - 10, pressed ? dk : lt);
+  }
+}
+
+/** The arm and nozzle that reach out over the cup. */
+function drawMachineSpout(p: PixelPainter, dx: number, pal: CafePalette, ready: boolean) {
+  const armY = 92;
+  const x0 = 248 + dx;
+  const x1 = 288 + dx;
+
+  // Arm.
+  p.rect(x0, armY, x1 - x0, 10, pal.metalDk);
+  p.rect(x0, armY + 1, x1 - x0, 6, pal.metal);
+  p.rect(x0, armY + 1, x1 - x0, 2, pal.metalLt);
+
+  // Nozzle, dropping to just above the cup's rim.
+  const nx = BREW_MACHINE.spoutTip.x + dx;
+  p.rect(nx - 5, armY + 10, 10, 8, pal.metalDk);
+  p.rect(nx - 3, armY + 10, 6, 7, pal.metal);
+  p.rect(nx - 7, armY + 16, 14, 4, pal.metalDk);
+  p.rect(nx - 5, armY + 17, 10, 2, ready ? pal.slabDk : pal.dark);
+}
+
+/**
+ * Three puffs off the nozzle after a brew lands. Drawn per frame with the same
+ * rects as everything else rather than as a React overlay — a view floating over
+ * the canvas would sit at screen resolution and break the art grid.
+ */
+export function drawBrewSteam(p: PixelPainter, t: number, pal: CafePalette) {
+  const { x, y } = BREW_MACHINE.spoutTip;
+  const clamped = Math.max(0, Math.min(1, t));
+
+  for (let i = 0; i < 3; i++) {
+    // Each puff starts a third of the window later than the last.
+    const local = clamped * 1.6 - i * 0.3;
+    if (local <= 0 || local >= 1) continue;
+
+    const rise = local * 26;
+    const drift = (i - 1) * 5 * local;
+    const alpha = 0.5 * (1 - local);
+    const size = 3 + local * 4;
+
+    p.ellipse(x + drift, y - 6 - rise, size, size * 0.8, `rgba(255,247,236,${alpha.toFixed(2)})`);
+  }
+
+  // A faint warm wash on the nozzle while it is still steaming.
+  if (clamped < 0.5) p.rect(x - 6, y - 6, 12, 4, pal.softShadow);
 }
