@@ -14,6 +14,7 @@ import { preferencesFor } from '../constants/affinity';
 import { CUP_PALETTES, DRINKS, DRINK_FRAME, type DrinkId } from '../constants/drinks';
 import { RARITY_STYLE, type CatSpec } from '../constants/catSprites';
 import { STARTER_CATS } from '../constants/gacha';
+import { BOND_TIP, MAX_BOND_LEVEL, bondProgress, tipLabel } from '../constants/bonds';
 import {
   DAY_PART_LABEL,
   catBio,
@@ -96,6 +97,51 @@ function DrinkLine({
         <Text style={styles.drinkLineCoins}>{spec.baseCoins}c</Text>
       </View>
     </View>
+  );
+}
+
+/**
+ * The relationship, given the space the card can't spare.
+ *
+ * The inspect card compresses this to one line; here it gets the headline
+ * treatment, because the almanac is where you come to ask "how far along am I
+ * with this cat" rather than "what do I pour it right now". `bonds.ts` derives
+ * every number below from the single stored XP total.
+ */
+function BondCard({ cat, xp }: { cat: CatSpec; xp: number }) {
+  const bond = bondProgress(xp, cat.rarity);
+  const tip = BOND_TIP[bond.level] ?? 0;
+
+  return (
+    <Card title="Bond">
+      <View style={styles.bondHead}>
+        <Text style={styles.bondLevel}>
+          Level {bond.level}
+          <Text style={styles.bondOf}> of {MAX_BOND_LEVEL}</Text>
+        </Text>
+        <Text style={styles.bondTip}>
+          {tip > 0 ? `${tipLabel(bond.level)} coins` : 'No tip yet'}
+        </Text>
+      </View>
+
+      <View style={styles.bondTrack}>
+        <View style={[styles.bondFill, { width: `${Math.round(bond.fraction * 100)}%` }]} />
+      </View>
+
+      <Text style={styles.bondFoot}>
+        {bond.maxed
+          ? `Fully bonded — ${xp} XP poured into this one.`
+          : `${bond.into} / ${bond.span} XP toward Level ${bond.level + 1}.`}
+      </Text>
+
+      {/* The one sentence that tells you how to move the bar. Serving a cat
+          something it won't drink pays no XP at all, which is not guessable
+          from a bar that only ever goes up. */}
+      <Text style={styles.bondHint}>
+        Earned by serving. A favourite pours three times the XP of a drink it
+        merely tolerates; something it won&apos;t drink pours none.
+      </Text>
+    </Card>
   );
 }
 
@@ -200,6 +246,8 @@ export default function CatAlmanacSheet({
                   ))}
                 </Card>
 
+                <BondCard cat={cat} xp={stat?.bondXp ?? 0} />
+
                 <Card title="Your record">
                   <Row label="Adopted" value={arrival} />
                   <Row
@@ -256,6 +304,35 @@ export default function CatAlmanacSheet({
 }
 
 const styles = StyleSheet.create({
+  bondHead: { flexDirection: 'row', alignItems: 'baseline', marginBottom: 8 },
+  bondLevel: { fontSize: 17, fontWeight: '900', color: colors.darkBrown },
+  bondOf: { fontSize: 12, fontWeight: '700', color: colors.mediumGray },
+  bondTip: {
+    marginLeft: 'auto',
+    fontSize: 13,
+    fontWeight: '900',
+    color: colors.accentGold,
+  },
+  bondTrack: {
+    height: 10,
+    borderRadius: 5,
+    overflow: 'hidden',
+    backgroundColor: colors.lightGray,
+  },
+  bondFill: { height: '100%', borderRadius: 5, backgroundColor: colors.lavender },
+  bondFoot: {
+    marginTop: 7,
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.brown700,
+  },
+  bondHint: {
+    marginTop: 4,
+    fontSize: 11,
+    lineHeight: 15,
+    color: colors.mediumGray,
+  },
+
   /**
    * An absolutely-positioned overlay rather than a <Modal>, which is what
    * AdoptionReveal does and for the same reason: React Native Web renders a

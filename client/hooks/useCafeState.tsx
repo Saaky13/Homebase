@@ -44,7 +44,8 @@ import {
   emptyCatStat,
   type CatStat,
 } from '../constants/catLore';
-import type { CatSpec } from '../constants/catSprites';
+import { getCat, type CatSpec } from '../constants/catSprites';
+import { serveOutcome } from '../constants/affinity';
 import {
   getPlant,
   growthStage,
@@ -695,7 +696,9 @@ type CafeContextType = {
   setFocusSessionActive: (active: boolean) => void;
   claimAchievement: (achievementId: string, pearlReward: number) => boolean;
   pullPrize: () => PullResult;
-  recordCatsServed: (catIds: string[]) => void;
+  // Takes the drink because bond XP is scored per cat against what it was
+  // actually handed — the affinity multiplier can't be recovered afterwards.
+  recordCatsServed: (catIds: string[], drink: DrinkId) => void;
   // Lets cats in and sends finished ones home. Driven by a tick in the
   // provider, so both canvases can just render whatever it produced.
   settleCafeVisitNow: () => void;
@@ -1801,9 +1804,14 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
    * The hour is read here rather than passed in because there is exactly one
    * moment being recorded — the serve — and letting the caller supply a clock
    * is how the tally ends up disagreeing with `dateKey`.
+   *
+   * `drink` is what the whole group was handed, which is also what makes this
+   * the bond XP writer: affinity is per cat, so one cup across three cats can
+   * pay three different amounts of XP — triple for the one that loves it,
+   * nothing at all for the one that won't drink it.
    */
   const recordCatsServed = useCallback(
-    (catIds: string[]) => {
+    (catIds: string[], drink: DrinkId) => {
       if (!catIds.length) return;
 
       const dateKey = getTodayDateKey();
@@ -1817,11 +1825,20 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
           // has never seen. That shouldn't happen — the spawner picks from
           // ownedCats — so open a record rather than dropping the cup.
           const prior = catStats[id] ?? emptyCatStat(null);
+          const spec = getCat(id);
+          // No spec means a roster id this build doesn't have. Record the cup
+          // — it was poured — but don't guess at an affinity for it.
+          const xp = spec && DRINKS[drink] ? serveOutcome(spec, drink).xp : 0;
+
           catStats[id] = {
             ...prior,
             firstServedOn: prior.firstServedOn ?? dateKey,
             lastServedOn: dateKey,
             parts: { ...prior.parts, [part]: (prior.parts[part] ?? 0) + 1 },
+            // `?? 0` rather than a bare add: a save written before bonds
+            // existed has stats without the field, and `undefined + 3` is NaN
+            // — which would persist and never recover.
+            bondXp: (prior.bondXp ?? 0) + xp,
           };
         }
 

@@ -535,6 +535,7 @@ export default function TownMap({ night }: { night?: boolean }) {
             <CatInspectCard
               cat={inspectedCat}
               recipes={state.recipes ?? []}
+              bondXp={state.catStats[inspectedCat.id]?.bondXp ?? 0}
               pos={cardPos}
               pointerX={cardPointerX}
               flip={cardFlip}

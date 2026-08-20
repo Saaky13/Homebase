@@ -98,12 +98,16 @@ cat cafe/
     │
     ├── constants/
     │   ├── achievements.ts  # 29 achievements across 6 categories + category colour defs
+    │   ├── affinity.ts      # What each cat thinks of each drink — serveOutcome's coins/popularity/XP
     │   ├── bobaCup.ts       # Generated 20×30 boba cup grid — 3 flavours, variable fill
+    │   ├── bonds.ts         # Cat bonds — XP curve per rarity, derived level, coin tip
     │   ├── cafeData.ts      # Legacy cat roster (7), shop items (7), reflection prompts (4), café levels (5)
     │   ├── cafePalette.ts   # Café interior palette + its night variant
     │   ├── cafeVisit.ts     # Café visits as state — two timestamps per customer, phases derived from the clock
+    │   ├── catLore.ts       # Per-cat record — adoption/serve dates, day parts, bondXp; odds and bios
     │   ├── catSprites.ts    # Procedural pixel-art cat system — 36 palettes, 9 patterns, grid assembly, roster of 36 cats
     │   ├── colors.ts        # Shared colour palette (cream, brown, gold, pastels, etc.)
+    │   ├── drinks.ts        # The menu — every drink's rarity, pearl cost, base coins, cup palette
     │   ├── gacha.ts         # Adoption draw — rarity weights, pickCat, starters, save seeding
     │   ├── gachaMachine.ts  # Pixel art for the capsule machine (36×54 grid, crank, capsules)
     │   ├── guideScript.ts   # All guide beats — 25 contextual messages with priority/match/cooldown
@@ -213,6 +217,7 @@ interface CafeState {
   focusTimer: FocusTimer;                    // focus session state
   claimedAchievements: string[];             // achievement ids whose pearls were claimed
   ownedCats: string[];                       // roster ids adopted from the shelter
+  catStats: Record<string, CatStat>;         // per-cat record — serve dates, day parts, bondXp
   cafeVisit: CafeVisitState;                 // who is at (or heading to) the café — the authority on cat presence
   greenhouse: GreenhouseState;               // plants, benches, seed packets, misting
   revealActive: boolean;                     // adoption reveal on screen; never persisted
@@ -350,6 +355,7 @@ These are the functions available on the context object returned by `useCafeStat
 | `spendCoins` | `(amount: number) => boolean` | −coins, returns success |
 | `addPopularity` | `(amount: number) => void` | Settles decay first, then adds base×caféMultiplier |
 | `addDrinkServed` | `(amount?: number) => void` | +popularity for cat served, updates dailyStats |
+| `recordCatsServed` | `(catIds: string[], drink: DrinkId) => void` | Stamps the per-cat record (serve dates, day part) and adds bond XP scored against the drink actually handed over |
 | `addBoba` | `(type, amount?) => void` | Adds to bobaInventory |
 | `addCatToQueue` | `(cat) => void` | Legacy queue cat addition |
 | `updateQueueWaitTimes` | `() => void` | Legacy queue time update |
@@ -403,7 +409,9 @@ Reflection answer → 2–5 Pearls/day
          ↓
 Pearls → Spent to serve cats (5 pearls per cat)
          ↓
-Serving cats → Coins (25 per cat) + Popularity (0.1 per cat)
+Serving cats → Coins (25 × bond tip) + Popularity (0.1 per cat) + Bond XP for that cat
+         ↓
+Bond level → a standing tip on every future cup that cat buys (up to +35%)
          ↓
 Coins → Shop upgrades (decor, flavors) ── or ── Cat Shelter adoption (100/pull)
          ↓                                              ↓
@@ -1223,6 +1231,71 @@ committing, so a double invocation can't double-charge or double-grant.
 
 ---
 
+## Cat bonds (constants/bonds.ts)
+
+Serve a cat drinks it actually likes and it warms to you, and a cat that has
+warmed to you tips. It is the shelter's answer to "what is this cat *for*" once
+it is adopted and roaming: the collection stops being a checklist and starts
+being a set of regulars.
+
+**One number per cat.** `bondXp` lives on `CatStat` in `constants/catLore.ts`,
+alongside the serve dates and day-part tallies, and is written in exactly one
+place — `recordCatsServed`. Level and tip are **derived** from it, never
+stored, for the same reason `catLore` refuses to keep a `served` total beside
+its `parts`: a stored total and the parts it came from eventually disagree, and
+only one of them can be right.
+
+**XP per cup is the drink's pearl value times the affinity multiplier** —
+`serveOutcome(spec, drink).xp` from `constants/affinity.ts`. Handing a cat its
+favourite therefore builds the bond several times faster than handing it
+something it merely tolerates, which is the whole point: the bond is a record
+of paying attention, not of volume.
+
+**Five levels, and rarity sets the road length, not its shape.** `BOND_CURVE`
+is front-loaded at every rarity — level 2 is cheap enough that a new player
+sees the number move on their first afternoon, and the last level is the long
+one:
+
+| Rarity | L2 | L3 | L4 | L5 |
+|---|---|---|---|---|
+| common | 40 | 120 | 240 | 400 |
+| rare | 70 | 210 | 420 | 700 |
+| epic | 110 | 330 | 660 | 1100 |
+| legendary | 170 | 510 | 1020 | 1700 |
+| ultra | 280 | 840 | 1680 | 2800 |
+
+**The tip is a standing multiplier on that cat's coins**, from `BOND_TIP`:
+
+| Level | 1 | 2 | 3 | 4 | 5 |
+|---|---|---|---|---|---|
+| Tip | — | +5% | +10% | +20% | +35% |
+
+The ceiling is deliberately below the affinity multiplier (a favourite pays
+×2.0). A maxed bond should never be worth more than giving a cat the right
+drink, or the optimal play becomes grinding one cat with whatever is cheapest.
+
+**The tip paid is the bond you walked in with.** The serve reads `bondTip`
+*before* `recordCatsServed` adds the cup's XP — see convention 19.
+
+**Exports:** `MAX_BOND_LEVEL`, `BOND_TIP`, `BOND_CURVE`, `xpToMax(rarity)`,
+`bondLevel(xp, rarity)`, `bondTip(xp, rarity)`, `bondProgress(xp, rarity)` →
+`BondProgress` (level, fraction, into, span, remaining, maxed), and
+`tipLabel(level)` → `"+15%"` or `"—"`. Pure — no React, no state, and read
+from inside state updaters that React may invoke more than once per commit.
+
+**Where it shows:** `CatInspectCard`'s bond row (`Lv n` plus the tip), reached
+by tapping a cat on the town map or the café floor; `CatAlmanacSheet`'s bond
+card (level of 5, tip label, progress to the next); and the collection grid in
+`app/cats/index.tsx`.
+
+**What the café pays today.** The serve in `CafeCanvas` is
+`addCoins(Math.round(25 * (1 + tip)))` — the flat 25 base with the tip applied,
+not `serveOutcome().coins`. `serveOutcome` already accepts a `bondTip` option
+for when the drink economy takes over the coin payout; until it does, the tip
+is grafted onto the old flat rate rather than the menu price.
+
+---
+
 ## Achievements (constants/achievements.ts)
 
 29 achievements across 6 categories, surfaced as the `achievements` Growth Hub
@@ -1378,6 +1451,9 @@ should generally not be committed with a session-local port.
   composting, a misting reservoir that keeps plants alive without growing them,
   and a day/night room lit by sun or by grow lamps
 - TopBar with currency pills persistent across all screens
+- Cat bonds (`constants/bonds.ts`): per-cat XP scored against the drink's
+  affinity, five derived levels on a per-rarity curve, and a standing coin tip
+  up to +35% shown on the inspect card, the almanac and the collection
 
 ### Not yet built
 - User XP / leveling system (separate from café level)
@@ -1489,3 +1565,9 @@ should generally not be committed with a session-local port.
     presence goes through `settleCafeVisit` / `markServed` / `pruneCustomers`
     in `constants/cafeVisit.ts`, and neither screen spawns, despawns or
     reassigns a cat on its own authority.
+19. **A bond pays the tip you walked in with.** The café serve reads
+    `bondTip(...)` *before* calling `recordCatsServed`, which is what adds this
+    cup's XP. Reading it after would mean the cup that levels a cat quietly
+    pays twice for the same drink — once at the old rate for being served, and
+    again at the new one it just bought. The same ordering applies anywhere
+    else a derived reward and the thing that feeds it are settled together.

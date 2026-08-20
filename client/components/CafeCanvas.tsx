@@ -42,6 +42,8 @@ import BobaCupSprite, { CUP_ASPECT } from './BobaCupSprite';
 import type { BobaFlavor } from '../constants/bobaCup';
 import { PearlIcon } from './Icons';
 import { getCat } from '../constants/catSprites';
+import { bondTip } from '../constants/bonds';
+import type { CatStat } from '../constants/catLore';
 import CatInspectCard, { CARD_H_ESTIMATE, anchorCard } from './CatInspectCard';
 import { catAspectRatio } from './catImageCache';
 
@@ -92,6 +94,10 @@ export default function CafeCanvas() {
   // A ref rather than a dep so an arrival doesn't tear down the render loop.
   const customersRef = useRef<CafeCustomer[]>([]);
   const pearlsRef = useRef(0);
+  // Bond XP per cat, mirrored for the same reason as pearls: the serve runs
+  // from a gesture handler and needs to know what each cat's tip is worth
+  // without waiting for a render.
+  const catStatsRef = useRef<Record<string, CatStat>>({});
   // Read by the serve, which runs from a gesture handler rather than a render.
   const flavorRef = useRef<BobaFlavor>('classic');
   // The cat the cup is currently hovering, read by the render loop to draw the
@@ -181,6 +187,10 @@ export default function CafeCanvas() {
   useEffect(() => {
     customersRef.current = state.cafeVisit.customers;
   }, [state.cafeVisit.customers]);
+
+  useEffect(() => {
+    catStatsRef.current = state.catStats;
+  }, [state.catStats]);
 
   // The provider's five-second tick already advances the café, but walking in
   // the door should not mean waiting up to five seconds to see whether anyone
@@ -347,9 +357,18 @@ export default function CafeCanvas() {
     sendCatToSeat(front, seat, seatIndex);
     // They carry off the cup you actually handed them, not a generic one.
     front.drink = flavorRef.current;
-    addCoins(25);
+
+    // The tip is the bond you had walking in — this cup's XP counts toward the
+    // next one. Paying the level the cup itself just bought would mean the
+    // serve that levels a cat quietly pays twice for the same drink.
+    const spec = getCat(front.catId);
+    const tip = spec
+      ? bondTip(catStatsRef.current[front.catId]?.bondXp ?? 0, spec.rarity)
+      : 0;
+    addCoins(Math.round(25 * (1 + tip)));
+
     addDrinkServed(1);
-    recordCatsServed([front.catId]);
+    recordCatsServed([front.catId], flavorRef.current);
     // They stop being *queued* here but stay in the café: a served cat sits
     // with its cup for a minute, and it must not turn up out in the town while
     // it's still visibly at a table.
@@ -837,6 +856,7 @@ export default function CafeCanvas() {
         <CatInspectCard
           cat={inspectedCat}
           recipes={state.recipes ?? []}
+          bondXp={state.catStats[inspectedCat.id]?.bondXp ?? 0}
           pos={cardPos}
           pointerX={cardPointerX}
           flip={cardFlip}
