@@ -1376,10 +1376,19 @@ card (level of 5, tip label, progress to the next); and the collection grid in
 `app/cats/index.tsx`.
 
 **What the café pays today.** The serve in `CafeCanvas` is
-`addCoins(Math.round(25 * (1 + tip)))` — the flat 25 base with the tip applied,
-not `serveOutcome().coins`. `serveOutcome` already accepts a `bondTip` option
-for when the drink economy takes over the coin payout; until it does, the tip
-is grafted onto the old flat rate rather than the menu price.
+`serveOutcome(spec, drink, { bondTip: tip }).coins` — the drink's own base
+coins, times what this cat thinks of it, times the tip. It used to be a flat
+`25 * (1 + tip)`, which meant affinity moved bond XP but never money.
+
+It changed because the brew machine's menu quotes the arithmetic to the coin.
+A payout preview that names a number the till does not pay is worse than no
+preview, so the preview and the serve read the same function. Same rule as
+`PayoutBadge`, which dropped its popularity line for failing it: **popularity
+is still the flat `addDrinkServed(1)`, not `serveOutcome().popularity`**, so
+neither the badge nor the menu panel mentions popularity at all. Routing it
+through affinity is a separate change, and one that has to pick a single path
+— `addDrinkServed` already applies the café multiplier and `serveOutcome`
+does not, so doing both double-counts.
 
 ---
 

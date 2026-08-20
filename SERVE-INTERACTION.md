@@ -4,6 +4,24 @@
 > This is the interactive core of the drink economy. `DRINK-ECONOMY.md` covers
 > the numbers; this covers the feel.
 
+> **⚠️ §2, §3 and §4 are superseded by `MACHINE.md`.** The bottom-docked
+> recipe rail was replaced by a brew machine behind the counter: select a
+> recipe on the machine, hold its dispense button to fill the cup, then drag
+> the cup to the cat. The rail itself survives as the machine's menu-sheet
+> contents.
+>
+> **⚠️ §5 (payout badges) and §10 (want bubbles) are dead, not deferred.**
+> Both were built and both were cut for the same reason: they put permanent
+> floating furniture over the cats. A plate over every waiting head turned the
+> queue into a spreadsheet, and a 26×20 bubble at `PX 2` had about eight art
+> pixels to name a drink with, so every cat asked for the same generic cup.
+> The inspect card (§9) answers both questions properly — it prices every
+> drink for the cat you tapped, and tapping a drink loads it — and
+> `ServeReceipt` says what one cup actually paid, once, then leaves. That
+> also removes long-press-to-peek: a preset is now a plain tap.
+>
+> §6 hand-off, §7 payoff and §11 state machine still stand.
+
 ---
 
 ## 1. What exists today
@@ -63,6 +81,8 @@ makes it, you pass it across the counter.
 
 ## 2. Gesture vocabulary
 
+> **SUPERSEDED — see `MACHINE.md`.** Kept for the reasoning, not the spec.
+
 Four gestures, no overlaps, each with exactly one meaning.
 
 | Gesture | Target | Result |
@@ -79,6 +99,8 @@ without a menu.
 ---
 
 ## 3. The recipe rail
+
+> **SUPERSEDED — see `MACHINE.md`.** Kept for the reasoning, not the spec.
 
 ### Container
 
@@ -147,6 +169,8 @@ which is the opposite of the goal.
 ---
 
 ## 4. The brew
+
+> **SUPERSEDED — see `MACHINE.md`.** Kept for the reasoning, not the spec.
 
 Tapping a cell runs a 420ms sequence at the counter. It exists so that choosing
 a drink has a physical consequence on screen rather than just changing a

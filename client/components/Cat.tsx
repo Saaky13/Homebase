@@ -1,8 +1,12 @@
 import type { Ctx2D } from './skiaCanvas2d';
 import type { Direction } from '../constants/catSprites';
-import type { BobaFlavor } from '../constants/bobaCup';
+import type { DrinkId } from '../constants/drinks';
 import { catAspectRatio, getCatSkImage } from './catImageCache';
-import { CUP_GRID_ASPECT, DRINK_STEPS, getBobaCupSkImage } from './bobaImageCache';
+import {
+  DRINK_CUP_STEPS,
+  drinkCupAspect,
+  getDrinkCupSkImage,
+} from './drinkCupImageCache';
 
 export type CatState =
   | 'walkingToLine'
@@ -28,8 +32,8 @@ export interface Cat {
   seatIndex: number | null;
   seatFacing: SeatFacing;
   seatedAt: number | null;
-  /** The cup handed over at the counter, carried until they leave. */
-  drink: BobaFlavor | null;
+  /** The recipe you actually handed over, carried until they leave. */
+  drink: DrinkId | null;
   /** Current draw scale, eased toward `targetScale` as the cat moves. */
   scale: number;
   targetScale: number;
@@ -244,13 +248,13 @@ export function drawCatDrink(ctx: Ctx2D, cat: Cat) {
   const catHeight = catWidth * catAspectRatio(cat.catId);
 
   const elapsed = cat.seatedAt ? Date.now() - cat.seatedAt : 0;
-  const step = Math.min(DRINK_STEPS - 1, Math.floor(elapsed / SIP_INTERVAL));
+  const step = Math.min(DRINK_CUP_STEPS - 1, Math.floor(elapsed / SIP_INTERVAL));
 
-  const img = getBobaCupSkImage(cat.drink as NonNullable<Cat['drink']>, step);
+  const img = getDrinkCupSkImage(cat.drink, step);
   if (!img) return;
 
   const cupWidth = catWidth * 0.3;
-  const cupHeight = cupWidth * CUP_GRID_ASPECT;
+  const cupHeight = cupWidth * drinkCupAspect(cat.drink);
 
   // Held on whichever side the cat is facing, so the cup is never behind them.
   const side = cat.seatFacing === 'right' ? -1 : 1;

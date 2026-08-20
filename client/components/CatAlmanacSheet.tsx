@@ -11,7 +11,13 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { CatSprite } from './CatSprite';
 import { CupSprite } from './CupSprite';
 import { preferencesFor } from '../constants/affinity';
-import { CUP_PALETTES, DRINKS, DRINK_FRAME, type DrinkId } from '../constants/drinks';
+import {
+  CUP_PALETTES,
+  DRINKS,
+  DRINK_FRAME,
+  DRINK_INK,
+  type DrinkId,
+} from '../constants/drinks';
 import { RARITY_STYLE, type CatSpec } from '../constants/catSprites';
 import { STARTER_CATS } from '../constants/gacha';
 import { BOND_TIP, MAX_BOND_LEVEL, bondProgress, tipLabel } from '../constants/bonds';
@@ -84,7 +90,9 @@ function DrinkLine({
         <Text style={[styles.drinkLineLabel, favorite && styles.drinkLineLabelHero]}>
           {favorite ? 'LOVES' : 'LIKES'}
         </Text>
-        <Text style={styles.drinkLineName}>{spec.name}</Text>
+        <Text style={[styles.drinkLineName, { color: DRINK_INK[spec.rarity] }]}>
+          {spec.name}
+        </Text>
         {/* The one place the two collections meet: knowing what a cat wants is
             worth nothing until the recipe is on your board, and this is where
             you find out it isn't. */}

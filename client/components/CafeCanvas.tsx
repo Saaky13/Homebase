@@ -7,6 +7,7 @@ import {
   Dimensions,
   Easing,
   PanResponder,
+  Platform,
   Pressable,
   type LayoutChangeEvent,
   type GestureResponderEvent,
@@ -32,19 +33,25 @@ import {
   getSeatSpots,
   drawCafeScene,
   drawServeTarget,
-  drawWantBubble,
+  drawBrewMachine,
   CUP_STATION,
+  BREW_MACHINE,
+  type BrewMachineView,
 } from './cafeRender';
 import { snap } from './cafePixel';
 import { cafePaletteFor, isNightAt } from '../constants/cafePalette';
 import { hasJoined, type CafeCustomer } from '../constants/cafeVisit';
-import BobaCupSprite, { CUP_ASPECT } from './BobaCupSprite';
-import type { BobaFlavor } from '../constants/bobaCup';
+import { CUP_ASPECT } from './BobaCupSprite';
 import { PearlIcon } from './Icons';
 import { getCat } from '../constants/catSprites';
 import { bondTip } from '../constants/bonds';
+import { serveOutcome } from '../constants/affinity';
+import { DRINKS, STARTER_RECIPES, type DrinkId } from '../constants/drinks';
+import { CupSprite } from './CupSprite';
+import { RecipeSheet } from './RecipeSheet';
 import type { CatStat } from '../constants/catLore';
 import CatInspectCard, { CARD_H_ESTIMATE, anchorCard } from './CatInspectCard';
+import { ServeReceipt } from './ServeReceipt';
 import { catAspectRatio } from './catImageCache';
 
 type Table = {
@@ -58,6 +65,41 @@ type Table = {
 // flows, so the floorboards run to the bottom edge of whatever screen this is
 // instead of being letterboxed or cropped.
 const DESIGN_WIDTH = 390;
+
+/**
+ * How long the dispense button is held to fill a cup, in ms. Linear, and
+ * emphatically not a timing game — there is no window to hit and no penalty
+ * for holding longer. The bar exists so the wait is legible, not so it can be
+ * failed.
+ */
+const HOLD_MS = 600;
+/** Release before full and the gauge drains back. No penalty, just undone. */
+const DRAIN_MS = 200;
+/** A dumped cup empties over this, matching the drain. Cancel is not a penalty. */
+const DUMP_MS = 200;
+/**
+ * Screen px a receipt is raised above the top of a cat's head. Has to clear the
+ * plate's own height as well as the gap, or the bottom edge lands on the ears —
+ * a sprite's silhouette is all ears, and a number resting on them reads as a hat.
+ */
+const RECEIPT_LIFT = 46;
+
+/**
+ * What one serve moved, floated off the cat it moved it for.
+ *
+ * Position is sampled at the moment of the serve and never tracked — the cat
+ * is on its way to a chair by the next frame, and a receipt that chased it
+ * would read as part of the cat rather than as a number leaving the till.
+ */
+interface Receipt {
+  id: string;
+  screenX: number;
+  screenY: number;
+  coins: number;
+  pearls: number;
+  xp: number;
+}
+
 /** Fallback height before the first layout pass, and the shortest room we draw. */
 const DESIGN_HEIGHT = 844;
 /** Below this the counter, the ten tables and the door stop fitting. */
@@ -69,7 +111,12 @@ const CUP_WIDTH = 46;
 const CUP_HEIGHT = CUP_WIDTH * CUP_ASPECT;
 /** How close the cup has to get, in design units, before a cat counts as hit. */
 const DROP_RADIUS = 52;
-const PEARLS_PER_CAT = 5;
+/**
+ * What the drop costs. Read off the recipe rather than a flat rate — handing a
+ * legendary to a cat that merely tolerates it is the expensive mistake the
+ * menu exists to let you avoid. Brewing itself is free; pearls go on the drop.
+ */
+const pearlsPerCat = (drink: DrinkId) => DRINKS[drink]?.pearls ?? 5;
 
 /**
  * Whether a cat will answer a tap.
@@ -99,7 +146,7 @@ export default function CafeCanvas() {
   // without waiting for a render.
   const catStatsRef = useRef<Record<string, CatStat>>({});
   // Read by the serve, which runs from a gesture handler rather than a render.
-  const flavorRef = useRef<BobaFlavor>('classic');
+  const flavorRef = useRef<DrinkId>('classic');
   // The cat the cup is currently hovering, read by the render loop to draw the
   // target ring. A ref rather than state so dragging doesn't re-render at 60fps.
   const dragTargetRef = useRef<Cat | null>(null);
@@ -153,6 +200,78 @@ export default function CafeCanvas() {
     serveCustomers,
     settleCafeVisitNow,
   } = useCafeState();
+
+  /* ---------------------------- the machine ---------------------------- */
+
+  /**
+   * The recipe in the machine, and the three cells on its face.
+   *
+   * Presets are most-recently-used: choosing from the menu promotes to the
+   * front. They are local rather than persisted — a save field for MRU order
+   * is worth adding once the rest of this settles, and until then the machine
+   * opens on the starters, which is where a new player would leave it anyway.
+   */
+  const [presetIds, setPresetIds] = useState<DrinkId[]>(() => {
+    const known = state.recipes ?? [];
+    const seed = [...STARTER_RECIPES.filter((id) => known.includes(id)), ...known];
+    return Array.from(new Set(seed)).slice(0, 3);
+  });
+  const [loaded, setLoaded] = useState<DrinkId>(
+    () => presetIds[0] ?? STARTER_RECIPES[0]
+  );
+  // Read by the render loop, which must not be restarted when the selection
+  // changes — the frame the change lands on is the one you would drop.
+  const loadedRef = useRef<DrinkId>(loaded);
+  loadedRef.current = loaded;
+
+  const [sheetOpen, setSheetOpen] = useState(false);
+
+  /**
+   * The cup on the counter, or null when there is nothing brewed.
+   *
+   * Nothing sits here speculatively: you cannot brew with an empty queue, and
+   * a cup whose cat has left is dumped rather than kept. A drink that outlives
+   * its customer is inventory arriving by the back door.
+   */
+  const [brewed, setBrewed] = useState<DrinkId | null>(null);
+  /**
+   * **The ref leads the state; it is never mirrored back from render.**
+   *
+   * Every other ref beside a state here is written `ref.current = state` at
+   * render time, and this one used to be as well. That is fine for a value the
+   * loop only reads a frame late — and fatally wrong for this one, because
+   * `cancelBrew` deliberately clears the ref *before* the state so the cup
+   * stops being servable the instant you hit ✕ rather than 200ms later.
+   *
+   * A render-time mirror undid that on the very next render, which
+   * `setDumping(1)` schedules immediately: the ref came back holding the drink,
+   * so the dump's closing `if (!brewedRef.current) setBrewed(null)` skipped,
+   * `dumping` cleared, and the cup fell back to `brewed ? 1 : 0` — full. The
+   * liquid dropped and then returned, which is exactly what ✕ looked like.
+   *
+   * So the ref is authoritative and every `setBrewed` writes it in the same
+   * breath. There are four such sites: the serve, the brew, `selectRecipe` and
+   * `cancelBrew`. A fifth that forgets is a bug this comment is here to catch.
+   */
+  const brewedRef = useRef<DrinkId | null>(null);
+
+  /**
+   * The cup emptying after a cancel. `null` when idle; otherwise the fill the
+   * dump is currently showing, ticked down to zero and then cleared.
+   *
+   * A plain state stepped on a timer rather than an `Animated.Value`, because
+   * `CupSprite` quantises fill to four steps — the whole dump is four renders,
+   * and driving it through the frame loop would re-render the canvas at 60fps
+   * to show four pictures.
+   */
+  const [dumping, setDumping] = useState<number | null>(null);
+
+  /** ms epoch the dispense hold began, or null when not held. */
+  const holdRef = useRef<number | null>(null);
+  /** Where the gauge was, and when, at the moment of an early release. */
+  const drainRef = useRef<{ from: number; at: number } | null>(null);
+  /** ms epoch the post-brew steam stops. Read by the loop, never by React. */
+  const steamUntilRef = useRef(0);
 
   const scale = Math.min(layout.width / DESIGN_WIDTH, MAX_SCALE);
   // Snapped to the art grid so the floorboard courses don't land on half pixels.
@@ -333,9 +452,13 @@ export default function CafeCanvas() {
   };
 
   const canServeFrontCat = () => {
+    // An empty cup is not servable. The hold is the whole gate: nothing leaves
+    // this counter that you did not stand there and brew.
+    if (!brewedRef.current) return false;
+
     const front = getFrontCatInQueue();
     if (!front) return false;
-    if (pearlsRef.current < PEARLS_PER_CAT) return false;
+    if (pearlsRef.current < pearlsPerCat(flavorRef.current)) return false;
     return findSeatIndexForCat(front) !== null;
   };
 
@@ -349,10 +472,19 @@ export default function CafeCanvas() {
     const seat = getSeatSpots()[seatIndex];
     if (!seat) return false;
 
-    if (pearlsRef.current < PEARLS_PER_CAT) return false;
-    if (!spendPearls(PEARLS_PER_CAT)) return false;
+    const cost = pearlsPerCat(flavorRef.current);
+    if (pearlsRef.current < cost) return false;
+    if (!spendPearls(cost)) return false;
 
-    pearlsRef.current -= PEARLS_PER_CAT;
+    pearlsRef.current -= cost;
+
+    // Sampled before the cat is sent off — `sendCatToSeat` only retargets, so
+    // `front.x/y` is still the spot in line it was standing in when you handed
+    // the cup over. That is where the numbers belong.
+    const view = scaleRef.current;
+    const catH = front.size * 1.8 * front.scale * catAspectRatio(front.catId);
+    const receiptX = view.offsetX + front.x * view.scale;
+    const receiptY = (front.y - catH / 2) * view.scale - RECEIPT_LIFT;
 
     sendCatToSeat(front, seat, seatIndex);
     // They carry off the cup you actually handed them, not a generic one.
@@ -365,7 +497,13 @@ export default function CafeCanvas() {
     const tip = spec
       ? bondTip(catStatsRef.current[front.catId]?.bondXp ?? 0, spec.rarity)
       : 0;
-    addCoins(Math.round(25 * (1 + tip)));
+    const out = spec ? serveOutcome(spec, flavorRef.current, { bondTip: tip }) : null;
+    // The recipe sets the payout, not a flat rate: base coins for the drink,
+    // times what this cat thinks of it, times the tip. The menu shows this
+    // arithmetic to the pearl, so the serve has to actually run it — a menu
+    // quoting numbers the till doesn't pay is worse than no menu.
+    const coins = out ? out.coins : DRINKS[flavorRef.current].baseCoins;
+    addCoins(coins);
 
     addDrinkServed(1);
     recordCatsServed([front.catId], flavorRef.current);
@@ -373,6 +511,26 @@ export default function CafeCanvas() {
     // with its cup for a minute, and it must not turn up out in the town while
     // it's still visibly at a table.
     serveCustomers([front.id]);
+
+    // The cup goes with them. Brewing again is a fresh hold — which is what
+    // keeps a serve a decision rather than a tap you can repeat.
+    setBrewed(null);
+    brewedRef.current = null;
+
+    // The three numbers the serve moved, said once where it happened. The id
+    // carries the clock as well as the customer: the same cat can come back
+    // and be served again while its first receipt is still in the air.
+    setReceipts((prev) => [
+      ...prev,
+      {
+        id: `${front.id}-${Date.now()}`,
+        screenX: receiptX,
+        screenY: receiptY,
+        coins,
+        pearls: cost,
+        xp: out ? out.xp : 0,
+      },
+    ]);
 
     return true;
   };
@@ -437,6 +595,36 @@ export default function CafeCanvas() {
   useEffect(() => {
     sceneRef.current = scenePicture;
   }, [scenePicture]);
+
+  /**
+   * The machine's live state, in a ref rather than a dep of the render effect.
+   * Everything on its face changes — the lamp with the queue, the cells with
+   * what you can pay for — and restarting the game loop on each of those would
+   * drop the frame the change happened on.
+   *
+   * `selectedIndex` is -1 whenever the loaded recipe came from the menu and has
+   * not been promoted yet, which is exactly what `drawPresetCell` reads to
+   * leave every cell unlit.
+   */
+  const machineRef = useRef<BrewMachineView>({
+    pal: palette,
+    presets: [],
+    selectedIndex: 0,
+    ready: false,
+    fill: 0,
+    pressed: false,
+    shake: 0,
+    steam: 0,
+  });
+  machineRef.current = {
+    ...machineRef.current,
+    pal: palette,
+    presets: presetIds.map((id) => ({
+      id,
+      affordable: state.pearls >= (DRINKS[id]?.pearls ?? 0),
+    })),
+    selectedIndex: presetIds.indexOf(loaded),
+  };
 
   /* ---------------------------- render loop ---------------------------- */
 
@@ -560,6 +748,12 @@ export default function CafeCanvas() {
 
       const ctx: Ctx2D = new SkiaCanvas2D(skCanvas);
 
+      // The machine is counter furniture but it can't live in the room picture:
+      // its lamp, gauge, cells and hum all change, and each change would force
+      // the whole room to be re-recorded. It is ~120 rects against the room's
+      // several thousand, so it is cheaper to just paint it every frame.
+      drawBrewMachine(ctx, machineRef.current);
+
       // Arrivals and departures both come off the customer list — a seated cat
       // leaves when the café state drops it, not on a timer of its own, so the
       // town knows it's coming back at the same moment the room does.
@@ -589,14 +783,11 @@ export default function CafeCanvas() {
       catsRef.current.forEach((cat) => drawCat(ctx, cat));
       catsRef.current.forEach((cat) => drawCatDrink(ctx, cat));
 
-      // Cats standing in line show what they came for. Keyed off arrival at
-      // the queue spot rather than the 'waiting' state: the queue is retargeted
-      // every frame, so a lined-up cat is permanently 'walkingToLine'.
-      catsRef.current.forEach((cat) => {
-        if (cat.state !== 'walkingToLine' && cat.state !== 'waiting') return;
-        if (Math.hypot(cat.targetX - cat.x, cat.targetY - cat.y) > 4) return;
-        drawWantBubble(ctx, cat.x + 24, cat.y - 44, palette);
-      });
+      // No want bubble. A 26x20 thought bubble at PX 2 has about eight pixels
+      // to say anything with, so every cat asked for the same generic cup —
+      // a permanent smudge beside every head that told you nothing. Tapping
+      // the cat opens the inspect card, which answers the same question
+      // properly and now loads the drink besides.
 
       picture.value = recorder.finishRecordingAsPicture();
 
@@ -631,12 +822,70 @@ export default function CafeCanvas() {
       // nobody is waiting (the cup just sits), or someone is waiting and the
       // pearls are short — which gets said out loud, because a cup that
       // silently refuses to pour reads as broken, not as unaffordable.
+      // Lit when there is someone to brew for. With an empty queue the machine
+      // reads as off, which is why the dispense button is allowed to refuse.
+      const ready = getFrontCatInQueue() !== null;
+      machineRef.current.ready = ready;
+
+      // Someone leaving mid-brew cancels it, and a cup that outlives its cat is
+      // dumped. Both fall out of the same check: no queue, no brew, no cup.
+      if (!ready) {
+        holdRef.current = null;
+        drainRef.current = null;
+        machineRef.current.fill = 0;
+        if (brewedRef.current) cancelRef.current();
+      }
+
+      const now = Date.now();
+      if (holdRef.current != null) {
+        const held = Math.min(1, (now - holdRef.current) / HOLD_MS);
+        machineRef.current.fill = held;
+
+        if (held >= 1 && !brewedRef.current) {
+          brewedRef.current = loadedRef.current;
+          setBrewed(loadedRef.current);
+          steamUntilRef.current = now + 1200;
+          // **Full releases the hold, whatever the finger is doing.** Holding
+          // past full does nothing by design, so keeping the hold open only
+          // gave a lost `onPressOut` somewhere to hide: `holdRef` stayed set,
+          // the machine kept humming, and the instant a cancel cleared the cup
+          // this branch re-filled it on the very next frame. Cancel looked
+          // like a shake that undid itself.
+          //
+          // The gauge stays full because `fill` is left at 1 and nothing
+          // drains it — `endHold` returns early on a null `holdRef`, so the
+          // release that eventually arrives is a no-op rather than a drain.
+          holdRef.current = null;
+          machineRef.current.pressed = false;
+        }
+      } else if (drainRef.current) {
+        // Released early. The gauge runs back down and nothing was spent —
+        // letting go is undoing, not failing.
+        const { from, at } = drainRef.current;
+        const t = Math.min(1, (now - at) / DRAIN_MS);
+        machineRef.current.fill = from * (1 - t);
+        if (t >= 1) drainRef.current = null;
+      }
+
+      // Steam only means something just landed, so it runs off a deadline
+      // rather than the gauge — the gauge is still full while the cup waits.
+      machineRef.current.steam =
+        now < steamUntilRef.current
+          ? 1 - (steamUntilRef.current - now) / 1200
+          : 0;
+
+      // The hum. A whole design unit either way at PX 2 is one art pixel, which
+      // is the smallest shake the room can express.
+      machineRef.current.shake =
+        holdRef.current != null ? (Math.floor(now / 70) % 3) - 1 : 0;
+
       const servable = canServeFrontCat();
       setCanServe((prev) => (prev === servable ? prev : servable));
       const short =
         !servable &&
-        getFrontCatInQueue() !== null &&
-        pearlsRef.current < PEARLS_PER_CAT;
+        ready &&
+        !!brewedRef.current &&
+        pearlsRef.current < pearlsPerCat(flavorRef.current);
       setNeedPearls((prev) => (prev === short ? prev : short));
 
       animationFrameRef.current = requestAnimationFrame(render);
@@ -815,15 +1064,159 @@ export default function CafeCanvas() {
     })
   ).current;
 
-  // The cup carries whatever you've got the most of.
-  const flavor = useMemo<BobaFlavor>(() => {
-    const { classic, matcha, strawberry } = state.bobaInventory;
-    if (matcha >= classic && matcha >= strawberry) return 'matcha';
-    if (strawberry >= classic) return 'strawberry';
-    return 'classic';
-  }, [state.bobaInventory]);
+  // The cup carries the recipe you brewed, not whatever was most abundant.
+  flavorRef.current = brewed ?? loaded;
 
-  flavorRef.current = flavor;
+  /* ----------------------------- the receipts ---------------------------- */
+
+  /**
+   * The receipts floating off cats that have just been served.
+   *
+   * A list rather than a single slot, because serves can overlap: the last
+   * receipt is still rising when the line steps forward and you hand over the
+   * next cup. Each removes itself when its animation ends, so nothing here
+   * needs a timer or a sweep.
+   */
+  const [receipts, setReceipts] = useState<Receipt[]>([]);
+
+  /**
+   * Load a recipe and promote it to the front of the presets.
+   *
+   * Selecting never brews and never spends — pearls are paid on the drop. It
+   * does dump whatever is already in the cup: the cup shows the recipe it
+   * holds, so leaving a brewed drink there while the face says something else
+   * would be the machine lying about what you are about to hand over.
+   */
+  const selectRecipe = useCallback(
+    (id: DrinkId) => {
+      setLoaded(id);
+      loadedRef.current = id;
+      setPresetIds((prev) => [id, ...prev.filter((p) => p !== id)].slice(0, 3));
+      setBrewed((prev) => (prev === id ? prev : null));
+      if (brewedRef.current !== id) brewedRef.current = null;
+      holdRef.current = null;
+      drainRef.current = null;
+      setDumping(null);
+    },
+    []
+  );
+
+  /**
+   * Dump the cup. Cheap by construction, because the brew was free — this is
+   * not undoing a cost, it is clearing the counter when you would rather bank
+   * the pearls than hand this drink to this cat.
+   */
+  const cancelBrew = useCallback(() => {
+    if (!brewedRef.current) return;
+    // The ref goes first and the state follows the animation: the drop reads
+    // `brewedRef`, so the cup stops being servable the instant you cancel, not
+    // 200ms later when it finishes looking empty.
+    brewedRef.current = null;
+    holdRef.current = null;
+    drainRef.current = null;
+    machineRef.current.fill = 0;
+    const started = Date.now();
+    setDumping(1);
+    const tick = setInterval(() => {
+      const left = 1 - (Date.now() - started) / DUMP_MS;
+      if (left > 0) {
+        setDumping(left);
+        return;
+      }
+      clearInterval(tick);
+      setDumping(null);
+      // A dump is slow enough to start a fresh brew inside, so only clear the
+      // cup if nothing has been brewed into it since.
+      if (!brewedRef.current) setBrewed(null);
+    }, DUMP_MS / 5);
+  }, []);
+
+  // The loop dumps too — a cup whose cat has left goes the same way as one you
+  // dumped on purpose, so there is one emptying animation rather than two.
+  const cancelRef = useRef(cancelBrew);
+  cancelRef.current = cancelBrew;
+
+  const beginHold = useCallback(() => {
+    // No speculative brewing. With nobody in line the button is inert and says
+    // so with a shake rather than silently doing nothing.
+    if (!machineRef.current.ready || brewedRef.current) {
+      machineRef.current.shake = 1;
+      return;
+    }
+    drainRef.current = null;
+    holdRef.current = Date.now();
+    machineRef.current.pressed = true;
+  }, []);
+
+  const endHold = useCallback(() => {
+    machineRef.current.pressed = false;
+    if (holdRef.current == null) return;
+    const held = Math.min(1, (Date.now() - holdRef.current) / HOLD_MS);
+    holdRef.current = null;
+    // Full is full — the cup is brewed and the gauge stays up until it is
+    // handed over. Anything short drains back with no penalty.
+    if (held < 1) drainRef.current = { from: held, at: Date.now() };
+  }, []);
+
+  /**
+   * The backstop for a release that never reaches the button.
+   *
+   * `onPressOut` is the normal way out of a hold, and it does not always come:
+   * a pointer that leaves the window, a gesture the browser takes over for a
+   * scroll or a text selection, a dev-tools focus steal. A hold is the one
+   * gesture in the room where a missed release is not harmless — the machine
+   * keeps filling a cup nobody is asking for — so the window gets watched too.
+   * Both paths call the same `endHold`, which is idempotent on a null hold.
+   */
+  useEffect(() => {
+    if (Platform.OS !== 'web' || typeof window === 'undefined') return;
+    const release = () => endHold();
+    window.addEventListener('pointerup', release);
+    window.addEventListener('pointercancel', release);
+    window.addEventListener('mouseup', release);
+    window.addEventListener('touchend', release);
+    window.addEventListener('blur', release);
+    return () => {
+      window.removeEventListener('pointerup', release);
+      window.removeEventListener('pointercancel', release);
+      window.removeEventListener('mouseup', release);
+      window.removeEventListener('touchend', release);
+      window.removeEventListener('blur', release);
+    };
+  }, [endHold]);
+
+  /**
+   * The line, for the menu's detail panel.
+   *
+   * Derived from `cafeVisit` rather than read off `catsRef`, because the sheet
+   * is React and has to re-render when the queue moves — the canvas's cat
+   * entities live in a ref precisely so they don't cause renders. Same source
+   * of truth either way (convention 18); the canvas mirrors this same list.
+   *
+   * Recomputed only while the sheet is open. `sheetTick` advances on the same
+   * 5s settle the provider runs, so a cat joining the line while you are
+   * reading updates the payouts under your thumb.
+   */
+  const sheetQueue = useMemo(() => {
+    if (!sheetOpen) return [];
+    const now = Date.now();
+    return state.cafeVisit.customers
+      .filter((c) => c.servedAt === null && hasJoined(c, now))
+      .sort((a, b) => a.setOffAt - b.setOffAt)
+      .map((c, i) => ({ catId: c.catId, place: i + 1 }));
+  }, [sheetOpen, state.cafeVisit.customers]);
+
+  /** Design-space rect -> the absolute box a Pressable needs over the canvas. */
+  const overlay = useCallback(
+    (r: { x: number; y: number; w: number; h: number }) => ({
+      position: 'absolute' as const,
+      left: offsetX + r.x * scale,
+      top: r.y * scale,
+      width: r.w * scale,
+      height: r.h * scale,
+    }),
+    [offsetX, scale]
+  );
 
   const handleLayout = (event: LayoutChangeEvent) => {
     const { width, height } = event.nativeEvent.layout;
@@ -850,6 +1243,56 @@ export default function CafeCanvas() {
           covering bare floor below it. */}
       <Pressable style={StyleSheet.absoluteFill} onPress={handleInspectTap} />
 
+      {/* The machine's controls are real views laid over the canvas at the same
+          design rects `drawBrewMachine` paints from, so the art and the touch
+          targets cannot drift apart — the bug the seat spots taught us. Above
+          the dismissal layer, so tapping the machine never also inspects a cat
+          standing behind it. */}
+      {presetIds.map((id, i) => {
+        const cell = BREW_MACHINE.presets[i];
+        if (!cell) return null;
+        return (
+          <Pressable
+            key={id}
+            style={overlay(cell)}
+            onPress={() => selectRecipe(id)}
+            accessibilityRole="button"
+            accessibilityLabel={`Load ${DRINKS[id].name}`}
+          />
+        );
+      })}
+
+      <Pressable
+        style={overlay(BREW_MACHINE.menuTab)}
+        onPress={() => setSheetOpen(true)}
+        accessibilityRole="button"
+        accessibilityLabel="Open the menu"
+      />
+
+      <Pressable
+        style={overlay(BREW_MACHINE.button)}
+        onPressIn={beginHold}
+        onPressOut={endHold}
+        accessibilityRole="button"
+        accessibilityLabel={`Hold to brew ${DRINKS[loaded].name}`}
+      />
+
+      {/* Dump the cup. Only here while there is something to dump — a standing
+          ✕ beside an empty cup is a control that spends most of its life
+          meaning nothing. Hidden mid-drag, where the cup is in the air and the
+          plate would be pointing at a station it has left. */}
+      {brewed && !dragging && (
+        <Pressable
+          style={[styles.cancel, { left: cupHome.x + CUP_WIDTH + 4, top: cupHome.y + 6 }]}
+          onPress={cancelBrew}
+          hitSlop={8}
+          accessibilityRole="button"
+          accessibilityLabel="Dump the cup"
+        >
+          <Text style={styles.cancelMark}>x</Text>
+        </Pressable>
+      )}
+
       {/* Above the dismissal layer so it's visible, below the cup so a card
           over the front of the queue never buries the thing you're dragging. */}
       {inspectedCat && (
@@ -863,6 +1306,15 @@ export default function CafeCanvas() {
           onHeight={(h) => {
             cardHRef.current = h;
           }}
+          // Tapping the drink a cat wants loads it. The card was already
+          // naming the answer; making the name the button removes the step
+          // where you read it here and then go hunt for it on the machine.
+          // Closes on the way out — the card has done its job, and leaving it
+          // pinned over the queue hides the machine you were sent to.
+          onPickDrink={(drink) => {
+            selectRecipe(drink);
+            setInspected(null);
+          }}
           onOpenAlmanac={() => {
             // Closed before navigating: the café stays mounted under the
             // pushed screen, and coming back to a card pinned on a cat that
@@ -873,6 +1325,22 @@ export default function CafeCanvas() {
         />
       )}
 
+      {/* What that serve just moved — coins in, pearls out, bond earned —
+          floated off the cat it was handed to. The only numbers the room
+          shows: a forecast plate over every waiting head turned the queue
+          into a spreadsheet, and the card already prices every drink. */}
+      {receipts.map((r) => (
+        <ServeReceipt
+          key={r.id}
+          screenX={r.screenX}
+          screenY={r.screenY}
+          coins={r.coins}
+          pearls={r.pearls}
+          xp={r.xp}
+          onDone={() => setReceipts((prev) => prev.filter((p) => p.id !== r.id))}
+        />
+      ))}
+
       {/* Serving is a gesture, not a button: pick the cup up off the counter
           and hand it to the cat at the front of the line. */}
       <Animated.View
@@ -880,10 +1348,12 @@ export default function CafeCanvas() {
         accessibilityRole="button"
         accessibilityLabel={
           canServe
-            ? `Drag the boba to the cat at the front of the line. Costs ${PEARLS_PER_CAT} pearls.`
+            ? `Drag the ${DRINKS[flavorRef.current].name} to the cat at the front of the line. Costs ${pearlsPerCat(flavorRef.current)} pearls.`
             : needPearls
-              ? `Not enough pearls to serve — it costs ${PEARLS_PER_CAT}.`
-              : 'No cat is waiting to be served'
+              ? `Not enough pearls to serve — it costs ${pearlsPerCat(flavorRef.current)}.`
+              : brewed
+                ? 'No cat is waiting to be served'
+                : `Nothing brewed — hold the machine to fill a ${DRINKS[loaded].name}`
         }
         style={[
           styles.cup,
@@ -902,8 +1372,30 @@ export default function CafeCanvas() {
           },
         ]}
       >
-        <BobaCupSprite flavor={flavor} width={CUP_WIDTH} />
+        {/* An unbrewed cup stands empty. Showing it full would promise a
+            drink the hold has not made yet. */}
+        <CupSprite
+          drink={brewed ?? loaded}
+          fill={dumping ?? (brewed ? 1 : 0)}
+          width={CUP_WIDTH}
+        />
       </Animated.View>
+
+      {sheetOpen && (
+        <RecipeSheet
+          recipes={state.recipes ?? []}
+          queue={sheetQueue}
+          catStats={state.catStats}
+          ownedCats={state.ownedCats}
+          loaded={loaded}
+          pearls={state.pearls}
+          onSelect={(id) => {
+            selectRecipe(id);
+            setSheetOpen(false);
+          }}
+          onDismiss={() => setSheetOpen(false)}
+        />
+      )}
 
       {(canServe || needPearls) && !dragging && (
         <View
@@ -914,7 +1406,7 @@ export default function CafeCanvas() {
             <Text style={styles.hintText}>{canServe ? 'Drag to serve' : 'Need'}</Text>
             <View style={styles.costRow}>
               <PearlIcon size={9} />
-              <Text style={styles.costText}>{PEARLS_PER_CAT}</Text>
+              <Text style={styles.costText}>{pearlsPerCat(brewed ?? loaded)}</Text>
             </View>
             {!canServe && <Text style={styles.hintText}>to serve</Text>}
           </View>
@@ -937,6 +1429,24 @@ const styles = StyleSheet.create({
     position: 'absolute',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  cancel: {
+    position: 'absolute',
+    width: 20,
+    height: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    // Square, because the room is. A round button here would be the only
+    // radius on the counter.
+    backgroundColor: 'rgba(255,247,236,0.94)',
+    borderWidth: 1,
+    borderColor: 'rgba(112,74,48,0.3)',
+  },
+  cancelMark: {
+    fontSize: 11,
+    fontWeight: '800',
+    lineHeight: 13,
+    color: '#8A4A3A',
   },
   hintRow: {
     position: 'absolute',
