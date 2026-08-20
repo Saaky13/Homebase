@@ -112,7 +112,8 @@ cat cafe/
     │   ├── gachaMachine.ts  # Pixel art for the capsule machine (36×54 grid, crank, capsules)
     │   ├── guideScript.ts   # All guide beats — 25 contextual messages with priority/match/cooldown
     │   ├── habitTiers.ts    # Keystone/Anchor/Quick tier definitions, pearl math functions
-    │   └── popularity.ts    # Popularity system — decay, gains, café multiplier, spawn pacing
+    │   ├── popularity.ts    # Popularity system — decay, gains, café multiplier, spawn pacing
+    │   └── userRank.ts      # The player's ladder — 10 ranks off pearls *earned*, buys nothing
     │
     ├── hooks/
     │   ├── guideEngine.ts   # Guide resolution engine — picks highest-priority eligible beat
@@ -162,7 +163,14 @@ The **TopBar** (`components/TopBar.tsx`) is rendered outside the Stack in `_layo
 so it persists across all screens. It shows:
 - "Homebase" brand text on the map, "‹ Town" back button on sub-screens
 - The current screen title (Café, Market, Growth Hub, Cat Shelter)
-- Three pills: coins (gold), pearls (purple), level (pink)
+- Four pills: coins (gold), pearls (purple), level (pink), rank (lavender)
+
+Coins and pearls carry their icon and no word — a pill wearing both says the
+same thing twice, and four pills plus a back button plus a screen title do not
+fit a 390-wide phone. The two numbers that *are* words are the two that need
+telling apart: `level` is the café's, bought with coins and read by the
+greenhouse gates; `rank` is the player's, fed by pearls earned. The rank's
+title is too long for a pill and lives on the Growth Hub.
 
 The **GuideOverlay** (`components/GuideOverlay.tsx`) also lives outside the Stack —
 an animated bottom-sheet that delivers contextual messages, first-visit orientations,
@@ -185,6 +193,7 @@ interface CafeState {
   missionLastClaimedDate: string | null;     // dateKey of last mission check-in
   reflectionLastClaimedDate: string | null;  // dateKey of last reflection answer
   pearls: number;                            // earned from habits, focus, mission, reflection
+  userXp: number;                            // pearls *earned* ever — the player rank ladder
   coins: number;                             // earned from serving cats; spent in shop
   popularity: number;                        // 0–100 float, decays daily, drives spawn rate
   popularityLastDecayedDate: string | null;  // dateKey through which decay was applied
@@ -321,7 +330,21 @@ default), seeds `ownedCats` for pre-shelter saves via `seedOwnedCats()` (starter
 plus one common per `cat-*` item previously bought in the Market), recomputes
 popularity decay, and launders `cafeVisit.customers` through `pruneCustomers()`
 — dropping customers whose cat left the collection, duplicate cats, and
-malformed timestamps.
+malformed timestamps. `catStats` is squared up with `ownedCats` by
+`backfillCatStats()`, so no owned cat can lack a record, and a save with no
+`userXp` rebuilds it with `backfillUserXp()` from the `dailyStats` pearl
+tallies it was already keeping — the check is an explicit `typeof … ===
+'number'`, because the `{...initialState, ...parsed}` spread would otherwise
+hand a missing key initialState's zero and the backfill would never run.
+
+**Pearls move in exactly one place.** `creditPearls(state, amount, dateKey)` —
+an internal helper beside `creditCoins`, not an exported action — is the only
+thing that touches `pearls`. It moves `pearls`, `userXp` and
+`dailyStats.pearlsEarned` in the same commit, which is what keeps a rebuilt
+rank equal to a lived one. Seven sites route through it: `addPearl`, the
+mission check-in, the reflection claim, the focus settle, `logHabitRep`,
+`unlogHabitRep` (negative, so un-logging takes the rank back too) and
+`toggleTodo` (negative on the toggle back). See convention 20.
 
 **Initial state:** 100 pearls, 0 coins, level 1, popularity 0, empty habits/logs/todos,
 `ownedCats: [...STARTER_CATS]` (mochi, clover, pebble).
@@ -408,6 +431,8 @@ Mission check-in → 25 Pearls/day
 Reflection answer → 2–5 Pearls/day
          ↓
 Pearls → Spent to serve cats (5 pearls per cat)
+         │
+         └── (earned, not held) → Player rank — 10 titles, buys nothing
          ↓
 Serving cats → Coins (25 × bond tip) + Popularity (0.1 per cat) + Bond XP for that cat
          ↓
@@ -434,6 +459,68 @@ the economy that can go backwards through neglect alone.
 
 **Focus timer rates:** 1 boba per 60 seconds, 1 pearl per 300 seconds.
 These constants are `SECONDS_PER_BOBA` and `SECONDS_PER_PEARL` in `useCafeState.tsx`.
+
+Two of the arrows above pay in something that isn't a currency. The player's
+rank and a cat's bond are both *records of having kept showing up* — one for
+the person, one for a relationship — and neither can be bought.
+
+---
+
+## Player rank (constants/userRank.ts)
+
+The one number in the app that measures the person rather than the café.
+
+**It is a rank, not a level.** The word was already spent twice: `state.level`
+is the café's, which coins buy and which the greenhouse gates read, and
+`bondLevel` is a single cat's. A third thing called a level would make every
+"reach level 5" string in the app ambiguous. This one is mostly worn as a
+title; the number beside it is small on purpose.
+
+**It buys nothing.** No gate hangs off it, no multiplier reads it. Giving it a
+payout would turn the one measure of the person into a thing to farm.
+
+**XP is exactly the pearls you have earned** — `state.userXp`. Not pearls held,
+so spending never costs rank; not coins, cups or minutes open, because pearls
+are already the currency the economy pays only for real work. Un-logging a
+habit takes back its rank XP the same way it takes back its pearls. That
+equivalence is what lets `creditPearls` be the single write site (convention
+20) and lets an old save rebuild its rank exactly from `dailyStats`.
+
+**Ten ranks, roughly doubling in width.** A full day of the routine pays around
+200–250 pearls, so the first title lands on day one and the last is a couple of
+months of showing up.
+
+| # | Title | XP | # | Title | XP |
+|---|---|---|---|---|---|
+| 1 | New here | 0 | 6 | Reliable | 2400 |
+| 2 | Settling in | 150 | 7 | Practised | 3600 |
+| 3 | Finding a rhythm | 400 | 8 | Seasoned | 5200 |
+| 4 | Steady | 850 | 9 | Rooted | 7200 |
+| 5 | Regular | 1500 | 10 | Devoted | 9800 |
+
+The titles say nothing about how *much* you did, only how long you have been at
+it, because that is the only thing this ladder measures.
+
+**Exports:** `RANKS`, `TOTAL_RANKS`, `rankAt(xp)`, `rankTitle(xp)`,
+`rankProgress(xp)` → `RankProgress` (rank, title, nextTitle, fraction, into,
+span, remaining, maxed), `backfillUserXp(dailyStats)`, and `RANK_ACCENT`.
+Everything is pure and derived — the rank is never stored beside the XP,
+because a stored total and its parts eventually disagree.
+
+`rankProgress` returns the whole band in one pass for the same reason
+`bondProgress` does: every caller that wants one of these wants three, and
+separate helpers over the same argument are separate chances to walk the ladder
+inconsistently.
+
+**Where it shows:** the `rank` pill in the TopBar (the number only), and a
+`PixelPanel` at the top of the Growth Hub's `renderHub()` — your name, `n / 10`,
+the title, a `PixelProgress` filled with `RANK_ACCENT`, and the remainder said
+in *pearls* rather than in "XP", which explains the mechanic without a tutorial
+and keeps the word XP free for a cat's bond.
+
+`RANK_ACCENT` is not in `ACCENTS`: that map is keyed by Growth Hub section and
+the rank isn't one, so a ninth key would owe every `Record<AccentKey, …>` in
+the theme an entry it has no use for.
 
 ---
 
@@ -1451,12 +1538,14 @@ should generally not be committed with a session-local port.
   composting, a misting reservoir that keeps plants alive without growing them,
   and a day/night room lit by sun or by grow lamps
 - TopBar with currency pills persistent across all screens
+- Player rank (`constants/userRank.ts`): 10 titles off pearls *earned*, a
+  TopBar pill and a Growth Hub panel, backfilled for old saves from
+  `dailyStats` — and buying nothing, on purpose
 - Cat bonds (`constants/bonds.ts`): per-cat XP scored against the drink's
   affinity, five derived levels on a per-rarity curve, and a standing coin tip
   up to +35% shown on the inspect card, the almanac and the collection
 
 ### Not yet built
-- User XP / leveling system (separate from café level)
 - **Verified native iOS/Android builds** — the Skia path, `app.json` config, and
   `.native.tsx` entrypoints are in place, but no build has been run end to end
 - **Porting the `pixelSvg` components off SVG data-URIs** — the currency icons,
@@ -1571,3 +1660,11 @@ should generally not be committed with a session-local port.
     pays twice for the same drink — once at the old rate for being served, and
     again at the new one it just bought. The same ordering applies anywhere
     else a derived reward and the thing that feeds it are settled together.
+20. **Pearls are credited in exactly one place.** `creditPearls` in
+    `useCafeState.tsx` moves `pearls`, `userXp` and `dailyStats.pearlsEarned`
+    in one commit. A new pearl payout must go through it: crediting `pearls`
+    directly leaves the player's rank behind, and crediting `pearlsEarned`
+    directly makes `backfillUserXp` disagree with the live total for every save
+    that ever migrates. `spendPearls` is the deliberate exception — spending is
+    not un-earning — and so is `claimAchievement`, which is a receipt for work
+    whose pearls, and whose rank XP, were paid when the work was done.

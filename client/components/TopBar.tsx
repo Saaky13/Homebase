@@ -3,6 +3,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { usePathname, useRouter } from 'expo-router';
 
 import { useCafeState } from '../hooks/useCafeState';
+import { rankAt } from '../constants/userRank';
 import { CoinIcon, PearlIcon } from './Icons';
 
 const TITLES: Record<string, string> = {
@@ -13,24 +14,35 @@ const TITLES: Record<string, string> = {
   '/greenhouse': 'Greenhouse',
 };
 
+/**
+ * A currency chip. `label` is optional and `icon` is the reason: a pill that
+ * carries both is saying the same thing twice, and the bar no longer has the
+ * width to spend on that. Coins and pearls are named by their icon; level and
+ * rank have no icon and are named by their word.
+ */
 function Pill({
   label,
   value,
   bg,
   fg,
   icon,
+  accessibilityLabel,
 }: {
-  label: string;
+  label?: string;
   value: string;
   bg: string;
   fg: string;
   icon?: React.ReactNode;
+  accessibilityLabel?: string;
 }) {
   return (
-    <View style={[styles.pill, { backgroundColor: bg }]}>
+    <View
+      style={[styles.pill, { backgroundColor: bg }]}
+      accessibilityLabel={accessibilityLabel ?? `${value} ${label ?? ''}`.trim()}
+    >
       {icon}
       <Text style={[styles.pillValue, { color: fg }]}>{value}</Text>
-      <Text style={[styles.pillLabel, { color: fg }]}>{label}</Text>
+      {label ? <Text style={[styles.pillLabel, { color: fg }]}>{label}</Text> : null}
     </View>
   );
 }
@@ -65,9 +77,30 @@ export default function TopBar() {
       {title ? <Text style={styles.title}>{title}</Text> : null}
 
       <View style={styles.pills}>
-        <Pill label="coins" value={String(state.coins)} bg="#F5D273" fg="#6B4A16" icon={<CoinIcon size={13} />} />
-        <Pill label="pearls" value={String(state.pearls)} bg="#E0B8E8" fg="#553067" icon={<PearlIcon size={13} />} />
+        <Pill
+          value={String(state.coins)}
+          bg="#F5D273"
+          fg="#6B4A16"
+          icon={<CoinIcon size={13} />}
+          accessibilityLabel={`${state.coins} coins`}
+        />
+        <Pill
+          value={String(state.pearls)}
+          bg="#E0B8E8"
+          fg="#553067"
+          icon={<PearlIcon size={13} />}
+          accessibilityLabel={`${state.pearls} pearls`}
+        />
         <Pill label="level" value={String(state.level)} bg="#F2A0BC" fg="#6B2038" />
+        {/*
+          The player's rank, in the purple family because it is fed by pearls
+          and nothing else. It sits beside the cafe's level rather than
+          replacing it — the greenhouse gates read `state.level` and their
+          strings say "reach level N", so that pill has to keep meaning what
+          those sentences mean. The two are told apart by their labels; the
+          rank's *title* is too long for a pill and lives on the Growth Hub.
+        */}
+        <Pill label="rank" value={String(rankAt(state.userXp))} bg="#C9BCF0" fg="#3E2E6B" />
       </View>
     </View>
   );
@@ -95,7 +128,7 @@ const styles = StyleSheet.create({
     borderBottomColor: 'rgba(94,58,70,0.14)',
   },
   brand: { fontSize: 13, fontWeight: '700', color: '#5E3A46' },
-  title: { fontSize: 13, fontWeight: '700', color: '#5E3A46' },
+  title: { fontSize: 13, fontWeight: '700', color: '#5E3A46', flexShrink: 1 },
   back: {
     backgroundColor: '#FFEFE9',
     borderRadius: 999,
@@ -106,13 +139,17 @@ const styles = StyleSheet.create({
   },
   backPressed: { transform: [{ translateY: 1 }], opacity: 0.85 },
   backText: { fontSize: 12, fontWeight: '700', color: '#8A5468' },
-  pills: { flexDirection: 'row', gap: 6, marginLeft: 'auto' },
+  // Four pills, a back button and a screen title do not fit a 390-wide phone
+  // at the old spacing. The set tightens together rather than any one pill
+  // being singled out, and `flexShrink` lets the title give up its space
+  // first — a clipped "Growth Hu" is a worse failure than a narrower gap.
+  pills: { flexDirection: 'row', gap: 5, marginLeft: 'auto', flexShrink: 0 },
   pill: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
     borderRadius: 999,
-    paddingHorizontal: 9,
+    paddingHorizontal: 8,
     paddingVertical: 4,
   },
   pillValue: { fontSize: 12, fontWeight: '800' },
