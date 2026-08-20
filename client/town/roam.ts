@@ -79,6 +79,14 @@ export interface Roamer {
   dir: MiniDirection;
   /** Timestamp (ms) until which this cat stands still. */
   pauseUntil: number;
+  /**
+   * This cat has been called into the café. It walks to the door and stops
+   * there instead of picking somewhere new, which is what turns "the state
+   * says this cat is in the café now" into something you can watch happen.
+   */
+  leaving: boolean;
+  /** Set once a leaving cat reaches the door. The caller drops it from the map. */
+  done: boolean;
 }
 
 function isWalkable(grid: Tile[][], tx: number, ty: number): boolean {
@@ -245,37 +253,166 @@ function retarget(roamer: Roamer, grid: Tile[][], group: Array<[number, number]>
   roamer.goalTy = ty;
 }
 
+/**
+ * The largest connected walkable area, cached per grid.
+ *
+ * Everyone lives in this one. Spawning into an isolated pocket would strand a
+ * cat there for the life of the session, and the flood fill is far too
+ * expensive to redo every time a cat comes back out of the café.
+ */
+let mainGroupGrid: Tile[][] | null = null;
+let mainGroupTiles: Array<[number, number]> = [];
+
+export function mainWalkableGroup(grid: Tile[][]): Array<[number, number]> {
+  if (mainGroupGrid === grid) return mainGroupTiles;
+  const groups = walkableComponents(grid);
+  mainGroupGrid = grid;
+  mainGroupTiles = groups.length
+    ? groups.reduce((a, b) => (b.length > a.length ? b : a))
+    : [];
+  return mainGroupTiles;
+}
+
+/**
+ * The pavement outside the café's door — where a cat vanishes when it goes in,
+ * and where it reappears when it comes back out.
+ *
+ * Searched rather than hardcoded: `HEAD_CLEARANCE` makes the two tiles directly
+ * against the south wall unwalkable, so the door's own tile is never the one a
+ * cat can actually stand on, and a nudge to the café's footprint would silently
+ * put a hardcoded pair inside the building.
+ */
+let cafeDoor: [number, number] | null = null;
+
+export function cafeDoorTile(grid: Tile[][]): [number, number] | null {
+  if (cafeDoor) return cafeDoor;
+  const cafe = BUILDINGS.find((b) => b.id === 'cafe');
+  if (!cafe) return null;
+
+  const cx = cafe.tx + Math.floor(cafe.tw / 2);
+  const by = cafe.ty + cafe.th;
+
+  for (let d = 0; d < 10; d++) {
+    for (const ox of [0, -1, 1, -2, 2]) {
+      if (isWalkable(grid, cx + ox, by + d)) {
+        cafeDoor = [cx + ox, by + d];
+        return cafeDoor;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Where each cat last stood, by roster id.
+ *
+ * The town map unmounts whenever you step into a building, and the roamers die
+ * with it. Without this, every return to the map rebuilt the cast at fresh
+ * spawn points — leave the map for ten seconds and the whole town had
+ * reshuffled, which read as teleporting. Module-level on purpose: it outlives
+ * the component but not the session, which is exactly the lifetime "the town
+ * looks how you left it" needs. Nothing about it belongs in the save.
+ */
+const lastSpots = new Map<string, [number, number]>();
+
+/** Records where a cat is, so its next spawn resumes there. */
+export function rememberSpot(catId: string, tx: number, ty: number): void {
+  lastSpots.set(catId, [Math.round(tx), Math.round(ty)]);
+}
+
+/** Snapshots every live roamer — the town map calls this as it unmounts. */
+export function rememberRoamers(roamers: Roamer[]): void {
+  for (const r of roamers) {
+    if (!r.done) rememberSpot(r.catId, r.tx, r.ty);
+  }
+}
+
+export function createRoamer(
+  grid: Tile[][],
+  catId: string,
+  now: number,
+  at?: [number, number]
+): Roamer | null {
+  const main = mainWalkableGroup(grid);
+  if (main.length === 0) return null;
+
+  // Explicit placement first (a cat stepping out of the café spawns at its
+  // door), then wherever this cat last stood, then anywhere.
+  const remembered = lastSpots.get(catId);
+  const [tx, ty] =
+    at ??
+    (remembered && isWalkable(grid, remembered[0], remembered[1])
+      ? remembered
+      : main[Math.floor(Math.random() * main.length)]);
+  const roamer: Roamer = {
+    catId,
+    tx,
+    ty,
+    goalTx: tx,
+    goalTy: ty,
+    path: [],
+    step: 0,
+    group: main,
+    speed: 2.0 + Math.random() * 1.0,
+    dir: 'front',
+    pauseUntil: now + Math.random() * 2500,
+    leaving: false,
+    done: false,
+  };
+  retarget(roamer, grid, main);
+  return roamer;
+}
+
 export function createRoamers(
   grid: Tile[][],
   catIds: string[],
   now: number
 ): Roamer[] {
-  const groups = walkableComponents(grid);
-  if (groups.length === 0) return [];
+  return catIds
+    .map((catId) => createRoamer(grid, catId, now))
+    .filter((r): r is Roamer => r !== null);
+}
 
-  // Everyone starts in the largest connected area. Spawning into an isolated
-  // pocket would strand a cat there for the life of the session.
-  const main = groups.reduce((a, b) => (b.length > a.length ? b : a));
+/**
+ * Sends a cat to the café door and marks it on its way in.
+ *
+ * A cat with nowhere to walk is finished immediately rather than left standing
+ * in the street: the state already says it is inside, and a roamer that can't
+ * reach the door would be a cat visibly in two places at once — exactly the
+ * thing this whole mechanism exists to prevent.
+ */
+export function sendRoamerToCafe(roamer: Roamer, grid: Tile[][]): void {
+  roamer.leaving = true;
+  roamer.pauseUntil = 0;
 
-  return catIds.map((catId, i) => {
-    // Spread the starting tiles across the group rather than clustering.
-    const [tx, ty] = main[Math.floor((i / Math.max(1, catIds.length)) * main.length)];
-    const roamer: Roamer = {
-      catId,
-      tx,
-      ty,
-      goalTx: tx,
-      goalTy: ty,
-      path: [],
-      step: 0,
-      group: main,
-      speed: 2.0 + Math.random() * 1.0,
-      dir: 'front',
-      pauseUntil: now + Math.random() * 2500,
-    };
-    retarget(roamer, grid, main);
-    return roamer;
-  });
+  const door = cafeDoorTile(grid);
+  if (!door) {
+    rememberSpot(roamer.catId, roamer.tx, roamer.ty);
+    roamer.done = true;
+    return;
+  }
+
+  const tx = Math.round(roamer.tx);
+  const ty = Math.round(roamer.ty);
+  if (tx === door[0] && ty === door[1]) {
+    rememberSpot(roamer.catId, tx, ty);
+    roamer.done = true;
+    return;
+  }
+
+  const path = findPath(grid, tx, ty, door[0], door[1]);
+  if (path.length === 0) {
+    rememberSpot(roamer.catId, roamer.tx, roamer.ty);
+    roamer.done = true;
+    return;
+  }
+
+  roamer.path = path;
+  roamer.step = 0;
+  const [nx, ny] = path[0];
+  roamer.goalTx = nx;
+  roamer.goalTy = ny;
+  roamer.dir = directionFor(nx - roamer.tx, ny - roamer.ty, roamer.dir);
 }
 
 /**
@@ -294,12 +431,15 @@ export function stepRoamers(
   const dt = Math.min(dtMs, 100) / 1000;
 
   for (const r of roamers) {
-    if (now < r.pauseUntil) continue;
+    if (r.done || now < r.pauseUntil) continue;
 
     const dx = r.goalTx - r.tx;
     const dy = r.goalTy - r.ty;
     const dist = Math.hypot(dx, dy);
-    const step = r.speed * dt;
+    // A cat called into the café trots: WALK_IN_MS is when it joins the line
+    // whether it has reached the door or not, so ambling risks being seen
+    // outside after the café has started drawing it.
+    const step = (r.leaving ? r.speed * 1.7 : r.speed) * dt;
 
     if (dist <= step || dist === 0) {
       r.tx = r.goalTx;
@@ -307,6 +447,13 @@ export function stepRoamers(
       r.step++;
 
       if (r.step >= r.path.length) {
+        // A cat heading for the café is at its door — it's inside now, and the
+        // café's own list has been carrying it since before it set off.
+        if (r.leaving) {
+          rememberSpot(r.catId, r.tx, r.ty);
+          r.done = true;
+          continue;
+        }
         // Arrived. Rest a moment before setting off again, so the town reads
         // as inhabited rather than as a conveyor belt of cats.
         if (Math.random() < 0.7) r.pauseUntil = now + 500 + Math.random() * 2200;
