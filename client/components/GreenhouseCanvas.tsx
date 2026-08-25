@@ -2,10 +2,10 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Animated,
   Dimensions,
+  Easing,
   PanResponder,
   Pressable,
   StyleSheet,
-  Text,
   View,
   type LayoutChangeEvent,
 } from 'react-native';
@@ -15,14 +15,13 @@ import { useCafeState, type Plant } from '../hooks/useCafeState';
 import { SkiaCanvas2D, type Ctx2D } from './skiaCanvas2d';
 import { snap } from './cafePixel';
 import {
+  greenhouseMaterialFor,
   greenhousePaletteFor,
   isNightAt,
-  type GreenhousePalette,
 } from '../constants/greenhousePalette';
 import {
   getPlant,
   growthStage,
-  PLANT_ORDER,
   type PlantStage,
 } from '../constants/plants';
 import { getPlantSkImage } from './plantImageCache';
@@ -38,14 +37,18 @@ import {
   CAN_W,
 } from './greenhouseRender';
 import {
+  barrelMouthY,
   canStationY,
   getSockets,
   potStationY,
   rackY,
+  BARREL,
+  CAN_CAPACITY,
   CAN_STATION,
   DESIGN_HEIGHT,
   DESIGN_WIDTH,
   DROP_RADIUS,
+  FILL_RADIUS,
   MAX_SCALE,
   MIN_DESIGN_HEIGHT,
   POT_H,
@@ -55,16 +58,29 @@ import {
   WATER_RADIUS,
 } from './greenhouseConfig';
 import SeedRackSheet from './SeedRackSheet';
+import { CoinIcon } from './Icons';
+import { PixelPanel, PixelText, PixelToast, type ToastValue } from './pixel';
+import { BEVEL, PX } from '../constants/pixelTheme';
 import { getTodayDateKey } from '../utils/date';
 
 /** How long a splash stays on screen after the can passes a pot. */
 const SPLASH_MS = 900;
+/** One gulp of the barrel per tick while the can is held at its mouth. */
+const FILL_TICK_MS = 170;
+/** A release this close to where it started is a tap, not a drag. */
+const TAP_SLOP = 6;
+
+/** Toast tints — the room's own inks, not the hub's accents. */
+const TINT_LEAF = '#5D9B5B';
+const TINT_GOLD = '#C4A252';
+const TINT_WARN = '#C0564E';
 
 type Splash = { id: number; x: number; y: number };
+type Flight = { id: number; x: number; y: number; delay: number };
 
 export default function GreenhouseCanvas() {
   const {
-    state, buySeed, plantSeed, waterPlants, harvestPlant, clearHusk,
+    state, plantSeed, waterPlants, harvestPlant, clearHusk,
   } = useCafeState();
 
   const [layout, setLayout] = useState(() => {
@@ -77,10 +93,15 @@ export default function GreenhouseCanvas() {
   const [night, setNight] = useState(() => isNightAt());
   const [hoverSlot, setHoverSlot] = useState<number | null>(null);
   const [splashes, setSplashes] = useState<Splash[]>([]);
+  const [flights, setFlights] = useState<Flight[]>([]);
   const [rackOpen, setRackOpen] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [toast, setToast] = useState<ToastValue | null>(null);
   const [husking, setHusking] = useState<Plant | null>(null);
+  // Water aboard the can, 0..CAN_CAPACITY. Deliberately not persisted: the can
+  // is empty when you walk in, the way the café's cup is, and filling it is
+  // the first beat of the ritual rather than a chore to skip.
+  const [canWater, setCanWater] = useState(0);
 
   const gh = state.greenhouse;
 
@@ -104,22 +125,24 @@ export default function GreenhouseCanvas() {
   }, []);
 
   const pal = useMemo(() => greenhousePaletteFor(night), [night]);
+  const material = useMemo(() => greenhouseMaterialFor(night), [night]);
   const sockets = useMemo(() => getSockets(), []);
 
   /* ------------------------------- seeds -------------------------------- */
 
-  // Whatever you have in hand, cheapest first. Kept as derived-with-override
-  // so buying a seed can promote it without stranding the picker on a species
-  // you've since planted your last one of.
-  const inHand = useMemo(
-    () => PLANT_ORDER.filter((id) => (gh.seeds[id] ?? 0) > 0),
-    [gh.seeds]
-  );
-  const loaded = selected && inHand.includes(selected) ? selected : inHand[0] ?? null;
+  // What the pot is loaded with. Purely a menu choice — there is no seed
+  // inventory to reconcile against. Coins leave your hand when the pot lands
+  // on a bench (`plantSeed` charges at the drop), so carrying a seed you
+  // can't afford is allowed, the same way the café lets you load a recipe
+  // you're short the pearls for. The refusal happens at the moment of truth.
+  const loaded = selected && getPlant(selected) ? selected : null;
+  const loadedSpec = loaded ? getPlant(loaded) : undefined;
+  const affordable = !loadedSpec || state.coins >= loadedSpec.cost;
 
-  const flash = useCallback((message: string) => {
-    setNotice(message);
-    setTimeout(() => setNotice((n) => (n === message ? null : n)), 2200);
+  const toastId = useRef(0);
+  const flash = useCallback((text: string, tint?: string) => {
+    toastId.current += 1;
+    setToast({ id: toastId.current, text, tint });
   }, []);
 
   /* ------------------------------- scene -------------------------------- */
@@ -219,12 +242,14 @@ export default function GreenhouseCanvas() {
     return recorder.finishRecordingAsPicture();
   }, [loaded]);
 
+  // Re-recorded per fill level, not per frame: the gauge only moves when a
+  // gulp lands or a pot drinks, which is a handful of times a visit.
   const canPicture = useMemo(() => {
     const recorder = Skia.PictureRecorder();
     const canvas = recorder.beginRecording(Skia.XYWHRect(0, 0, CAN_W, CAN_H));
-    drawWateringCan(new SkiaCanvas2D(canvas), pal);
+    drawWateringCan(new SkiaCanvas2D(canvas), pal, canWater / CAN_CAPACITY);
     return recorder.finishRecordingAsPicture();
-  }, [pal]);
+  }, [pal, canWater]);
 
   /* ------------------------------ the drags ----------------------------- */
 
@@ -259,6 +284,21 @@ export default function GreenhouseCanvas() {
 
   const actions = useRef({ plantSeed, waterPlants, flash });
   actions.current = { plantSeed, waterPlants, flash };
+
+  // The can's water, mirrored for the responder. The ref is the authority
+  // during a gesture — the fill interval and the pour both move it between
+  // renders — and the state trails it for the gauge redraw.
+  const canWaterRef = useRef(0);
+
+  const splashId = useRef(0);
+  const addSplash = useCallback((x: number, y: number) => {
+    const id = ++splashId.current;
+    setSplashes((prev) => [...prev, { id, x, y }]);
+    setTimeout(
+      () => setSplashes((prev) => prev.filter((s) => s.id !== id)),
+      SPLASH_MS
+    );
+  }, []);
 
   /** Design-space point for the base of a dragged object. */
   const basePoint = (home: { x: number; y: number }, dx: number, dy: number, w: number, h: number) => {
@@ -303,8 +343,8 @@ export default function GreenhouseCanvas() {
 
   const potResponder = useRef(
     PanResponder.create({
-      // Always grabbable. A pot that silently refuses to move when you have no
-      // seed reads as broken rather than as empty — it should lift, find
+      // Always grabbable. A pot that silently refuses to move when nothing is
+      // loaded reads as broken rather than as empty — it should lift, find
       // nothing to plant, and drop back onto the table.
       onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponder: () => true,
@@ -322,17 +362,38 @@ export default function GreenhouseCanvas() {
         setDragging(null);
         springHome(potPan);
 
-        if (slot === null) {
-          if (!loadedRef.current) actions.current.flash('No seed in hand — open the rack');
+        // A tap on the pot opens the menu — the pot is the thing you load, so
+        // it is also the obvious place to ask "with what".
+        if (Math.hypot(gesture.dx, gesture.dy) < TAP_SLOP) {
+          setRackOpen(true);
           return;
         }
+
+        if (slot === null) {
+          if (!loadedRef.current) {
+            actions.current.flash('Pick a seed from the rack first', TINT_WARN);
+          }
+          return;
+        }
+
+        const spec = getPlant(loadedRef.current as string);
         const result = actions.current.plantSeed(loadedRef.current as string, slot);
         // `'reason' in result` rather than `!result.ok`: the project extends
         // expo/tsconfig.base, which leaves strictNullChecks off, and without it
         // TypeScript won't narrow a union on a boolean discriminant. The `in`
         // operator narrows either way.
-        if ('reason' in result && result.reason === 'occupied') {
-          actions.current.flash('That socket is taken');
+        if ('reason' in result) {
+          if (result.reason === 'coins' && spec) {
+            actions.current.flash(`Need ${spec.cost} coins for a ${spec.name}`, TINT_WARN);
+          } else if (result.reason === 'occupied') {
+            actions.current.flash('That socket is taken', TINT_WARN);
+          } else if (result.reason === 'locked') {
+            actions.current.flash('That bench is still locked', TINT_WARN);
+          }
+          return;
+        }
+        if (spec) {
+          actions.current.flash(`Planted ${spec.name} · −${spec.cost} coins`, TINT_LEAF);
         }
       },
       onPanResponderTerminate: () => {
@@ -346,7 +407,16 @@ export default function GreenhouseCanvas() {
   // Plants the can has already passed over during *this* drag, so a wobbling
   // hand doesn't splash the same pot ten times.
   const wateredThisDrag = useRef(new Set<string>());
-  const splashId = useRef(0);
+  // The empty-can toast fires once per drag, not once per pot passed.
+  const flaggedEmpty = useRef(false);
+  const fillTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const stopFilling = useCallback(() => {
+    if (fillTimer.current) {
+      clearInterval(fillTimer.current);
+      fillTimer.current = null;
+    }
+  }, []);
 
   const canResponder = useRef(
     PanResponder.create({
@@ -354,19 +424,47 @@ export default function GreenhouseCanvas() {
       onMoveShouldSetPanResponder: () => true,
       onPanResponderGrant: () => {
         wateredThisDrag.current = new Set();
+        flaggedEmpty.current = false;
         setDragging('can');
       },
       onPanResponderMove: (_e, gesture) => {
         canPan.setValue({ x: gesture.dx, y: gesture.dy });
 
-        // The can hit-tests continuously *during* the drag rather than on
-        // drop, so one sweep along a bench waters everything it passes.
-        // Twelve plants should not be twelve gestures.
+        const v = view.current;
         const spout = basePoint(canHomeRef.current, gesture.dx, gesture.dy, CAN_W, CAN_H);
-        const all = getSockets();
+
+        // Held at the barrel's mouth, the can drinks — one gulp per tick, so
+        // you watch the gauge climb rather than getting a full can for free.
+        // An interval because a hand held still fires no move events, and
+        // "hold it there" is exactly the gesture being asked for.
+        const mouthY = barrelMouthY(v.designHeight);
+        const overBarrel =
+          Math.hypot(BARREL.x - spout.x, mouthY - spout.y) < FILL_RADIUS;
+        if (overBarrel && canWaterRef.current < CAN_CAPACITY) {
+          if (!fillTimer.current) {
+            const gulp = () => {
+              if (canWaterRef.current >= CAN_CAPACITY) {
+                stopFilling();
+                return;
+              }
+              canWaterRef.current += 1;
+              setCanWater(canWaterRef.current);
+              addSplash(BARREL.x, barrelMouthY(view.current.designHeight) - 4);
+            };
+            gulp(); // The first gulp lands the moment you arrive.
+            fillTimer.current = setInterval(gulp, FILL_TICK_MS);
+          }
+        } else if (fillTimer.current) {
+          stopFilling();
+        }
+
+        // The can hit-tests continuously *during* the drag rather than on
+        // drop, so one sweep along a bench waters everything it passes —
+        // until the can runs dry. Each pot drinks one gulp of the gauge.
         // Read fresh rather than captured: this responder is built once, and a
         // date from the first render is wrong for anyone who leaves the app
         // open across midnight.
+        const all = getSockets();
         const today = getTodayDateKey();
 
         plantsRef.current.forEach((plant) => {
@@ -378,18 +476,23 @@ export default function GreenhouseCanvas() {
             return;
           }
 
+          if (canWaterRef.current <= 0) {
+            if (!flaggedEmpty.current) {
+              flaggedEmpty.current = true;
+              actions.current.flash('The can is empty — dip it in the rain barrel', TINT_WARN);
+            }
+            return;
+          }
+
+          canWaterRef.current -= 1;
+          setCanWater(canWaterRef.current);
           wateredThisDrag.current.add(plant.id);
-          const id = ++splashId.current;
-          const drop = { id, x: socket.x, y: socket.y - 30 };
-          setSplashes((prev) => [...prev, drop]);
-          setTimeout(
-            () => setSplashes((prev) => prev.filter((s) => s.id !== id)),
-            SPLASH_MS
-          );
+          addSplash(socket.x, socket.y - 30);
         });
       },
       onPanResponderRelease: () => {
         setDragging(null);
+        stopFilling();
         springHome(canPan);
 
         const ids = [...wateredThisDrag.current];
@@ -403,18 +506,45 @@ export default function GreenhouseCanvas() {
         actions.current.flash(
           result.earned > 0
             ? `Watered ${result.watered} · +${result.earned} coins${result.bloom ? ' (bloom bonus)' : ''}`
-            : `Watered ${result.watered}`
+            : `Watered ${result.watered}`,
+          TINT_LEAF
         );
       },
       onPanResponderTerminate: () => {
         setDragging(null);
+        stopFilling();
         wateredThisDrag.current = new Set();
         springHome(canPan);
       },
     })
   ).current;
 
+  // A live interval outliving the component would keep filling a can that no
+  // longer exists.
+  useEffect(() => stopFilling, [stopFilling]);
+
   /* ------------------------------- the taps ----------------------------- */
+
+  const flightId = useRef(0);
+  const endFlight = useCallback((id: number) => {
+    setFlights((prev) => prev.filter((f) => f.id !== id));
+  }, []);
+
+  /** Coins fly from the pot toward the TopBar's coin pill. */
+  const spawnFlights = useCallback((x: number, y: number, amount: number) => {
+    const count = Math.min(6, Math.max(3, Math.ceil(amount / 12)));
+    const added: Flight[] = [];
+    for (let i = 0; i < count; i++) {
+      flightId.current += 1;
+      added.push({
+        id: flightId.current,
+        x: x + (i - (count - 1) / 2) * 7,
+        y,
+        delay: i * 70,
+      });
+    }
+    setFlights((prev) => [...prev, ...added]);
+  }, []);
 
   const onPlantPress = (plant: Plant) => {
     if (plant.dead) {
@@ -423,7 +553,17 @@ export default function GreenhouseCanvas() {
     }
     if (plant.pendingCoins > 0) {
       const collected = harvestPlant(plant.id);
-      if (collected > 0) flash(`+${collected} coins`);
+      if (collected > 0) {
+        const socket = sockets[plant.slot];
+        if (socket) {
+          spawnFlights(
+            offsetX + socket.x * scale,
+            (socket.y - POT_H / 2) * scale,
+            collected
+          );
+        }
+        flash(`+${collected} coins`, TINT_GOLD);
+      }
       return;
     }
 
@@ -503,14 +643,14 @@ export default function GreenhouseCanvas() {
         ]}
       />
 
-      {/* The pot you drag onto a bench. */}
+      {/* The pot you drag onto a bench. Tapping it opens the rack. */}
       <Animated.View
         {...potResponder.panHandlers}
         accessibilityRole="button"
         accessibilityLabel={
-          loaded
-            ? `Drag the ${getPlant(loaded)?.name} pot onto a bench`
-            : 'Empty pot. Buy a seed from the rack first.'
+          loadedSpec
+            ? `Drag the ${loadedSpec.name} pot onto a bench — ${loadedSpec.cost} coins when it lands`
+            : 'Empty pot. Tap it to pick a seed from the rack.'
         }
         style={[
           styles.drag,
@@ -532,13 +672,41 @@ export default function GreenhouseCanvas() {
             <Picture picture={potPicture} />
           </Group>
         </Canvas>
+        {/* The price rides on the pot, because the pot is what you pay for.
+            Red means the drop will refuse — the same warning the café's menu
+            gives, at the same moment: before you commit, never after. */}
+        {loadedSpec ? (
+          <View
+            style={[
+              styles.priceTag,
+              {
+                top: POT_H * scale - 2,
+                backgroundColor: material.face,
+                borderColor: material.faceDk,
+              },
+            ]}
+          >
+            <CoinIcon size={9} />
+            <PixelText
+              size={12}
+              color={affordable ? material.ink : TINT_WARN}
+              style={styles.priceText}
+            >
+              {String(loadedSpec.cost)}
+            </PixelText>
+          </View>
+        ) : null}
       </Animated.View>
 
-      {/* The can. Free to use — the cost of the greenhouse is showing up. */}
+      {/* The can. The water is free — but you fetch it from the barrel. */}
       <Animated.View
         {...canResponder.panHandlers}
         accessibilityRole="button"
-        accessibilityLabel="Drag the watering can across your plants"
+        accessibilityLabel={
+          canWater > 0
+            ? `Drag the watering can across your plants — ${canWater} of ${CAN_CAPACITY} waterings aboard`
+            : 'The watering can is empty. Hold it at the rain barrel to fill it.'
+        }
         style={[
           styles.drag,
           {
@@ -561,24 +729,29 @@ export default function GreenhouseCanvas() {
         </Canvas>
       </Animated.View>
 
-      {notice ? (
-        <View style={styles.noticeWrap} pointerEvents="none">
-          <View style={styles.notice}>
-            <Text style={styles.noticeText}>{notice}</Text>
-          </View>
-        </View>
-      ) : null}
+      {/* Harvested coins on their way to the pill that counts them. */}
+      {flights.map((flight) => (
+        <CoinFlight
+          key={flight.id}
+          flight={flight}
+          targetX={layout.width - 52}
+          targetY={-36}
+          onDone={endFlight}
+        />
+      ))}
+
+      <PixelToast toast={toast} material={material} style={styles.toast} />
 
       {husking ? (
         <View style={styles.sheetBackdrop}>
-          <View style={styles.huskCard}>
-            <Text style={styles.huskTitle}>
+          <PixelPanel material={material} style={styles.huskCard}>
+            <PixelText size="title" color={material.ink}>
               Your {getPlant(husking.species)?.name} didn&apos;t make it
-            </Text>
-            <Text style={styles.huskBody}>
-              Compost it and you get one fertilizer — enough to skip a growth day
-              on the next thing you plant here.
-            </Text>
+            </PixelText>
+            <PixelText plain size={12} color={material.inkDim} style={styles.huskBody}>
+              Compost it and you get one fertilizer — enough to skip a growth
+              day on the next thing you plant here.
+            </PixelText>
             <View style={styles.huskRow}>
               <Pressable
                 accessibilityRole="button"
@@ -586,25 +759,38 @@ export default function GreenhouseCanvas() {
                   clearHusk(husking.id, false);
                   setHusking(null);
                 }}
-                style={({ pressed }) => [styles.huskBtn, pressed && styles.pressed]}
+                style={({ pressed }) => [
+                  styles.huskBtn,
+                  {
+                    backgroundColor: material.sunk,
+                    borderColor: material.faceDk,
+                  },
+                  pressed && styles.pressed,
+                ]}
               >
-                <Text style={styles.huskBtnText}>Just clear it</Text>
+                <PixelText size="label" color={material.inkDim}>
+                  Just clear it
+                </PixelText>
               </Pressable>
               <Pressable
                 accessibilityRole="button"
                 onPress={() => {
                   clearHusk(husking.id, true);
                   setHusking(null);
-                  flash('+1 fertilizer');
+                  flash('+1 fertilizer', TINT_LEAF);
                 }}
                 style={({ pressed }) => [
-                  styles.huskBtn, styles.huskPrimary, pressed && styles.pressed,
+                  styles.huskBtn,
+                  styles.huskPrimary,
+                  pressed && styles.pressed,
                 ]}
               >
-                <Text style={[styles.huskBtnText, styles.huskPrimaryText]}>Compost</Text>
+                <PixelText size="label" color="#2F6B54">
+                  Compost
+                </PixelText>
               </Pressable>
             </View>
-          </View>
+          </PixelPanel>
         </View>
       ) : null}
 
@@ -612,27 +798,94 @@ export default function GreenhouseCanvas() {
         <SeedRackSheet
           coins={state.coins}
           level={state.level}
-          seeds={gh.seeds}
           fertilizer={gh.fertilizer}
-          onBuy={(id) => {
+          selected={loaded}
+          material={material}
+          onSelect={(id) => {
             const spec = getPlant(id);
             if (!spec) return;
             if (state.level < spec.level) {
-              flash(`Reach level ${spec.level} to unlock ${spec.name}`);
-              return;
-            }
-            if (!buySeed(id)) {
-              flash('Not enough coins');
+              flash(`Reach level ${spec.level} to unlock ${spec.name}`, TINT_WARN);
               return;
             }
             setSelected(id);
-            flash(`${spec.name} seed — drag the pot to a bench`);
+            setRackOpen(false);
+            flash(`${spec.name} loaded — drag the pot to a bench`, TINT_LEAF);
           }}
-          onSelect={(id) => setSelected(id)}
           onClose={() => setRackOpen(false)}
         />
       ) : null}
     </View>
+  );
+}
+
+/**
+ * One coin arcing from a harvested pot toward the TopBar's coin pill. Pops up
+ * off the pot first, then commits to the corner — a straight line reads as
+ * the coin being sucked away, not tossed.
+ */
+function CoinFlight({
+  flight,
+  targetX,
+  targetY,
+  onDone,
+}: {
+  flight: Flight;
+  targetX: number;
+  targetY: number;
+  onDone: (id: number) => void;
+}) {
+  const progress = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    const anim = Animated.sequence([
+      Animated.delay(flight.delay),
+      Animated.timing(progress, {
+        toValue: 1,
+        duration: 620,
+        easing: Easing.in(Easing.quad),
+        useNativeDriver: false,
+      }),
+    ]);
+    anim.start(({ finished }) => {
+      if (finished) onDone(flight.id);
+    });
+    return () => anim.stop();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const dx = targetX - flight.x;
+  const dy = targetY - flight.y;
+
+  return (
+    <Animated.View
+      pointerEvents="none"
+      style={{
+        position: 'absolute',
+        left: flight.x,
+        top: flight.y,
+        opacity: progress.interpolate({
+          inputRange: [0, 0.1, 0.85, 1],
+          outputRange: [0, 1, 1, 0],
+        }),
+        transform: [
+          {
+            translateX: progress.interpolate({
+              inputRange: [0, 1],
+              outputRange: [0, dx],
+            }),
+          },
+          {
+            translateY: progress.interpolate({
+              inputRange: [0, 0.22, 1],
+              outputRange: [0, -26, dy],
+            }),
+          },
+        ],
+      }}
+    >
+      <CoinIcon size={14} />
+    </Animated.View>
   );
 }
 
@@ -642,19 +895,19 @@ const styles = StyleSheet.create({
   hit: { position: 'absolute' },
   hitPressed: { backgroundColor: 'rgba(255,255,255,0.24)', borderRadius: 6 },
   drag: { position: 'absolute' },
-  noticeWrap: { position: 'absolute', left: 0, right: 0, top: 12, alignItems: 'center' },
-  notice: {
+  toast: { position: 'absolute', left: 0, right: 0, top: 12 },
+  priceTag: {
+    position: 'absolute',
+    alignSelf: 'center',
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 999,
-    backgroundColor: 'rgba(255,251,244,0.94)',
+    gap: 3,
+    paddingHorizontal: PX * 2,
+    paddingVertical: 1,
     borderWidth: 1,
-    borderColor: 'rgba(78,56,40,0.2)',
+    borderRadius: 0,
   },
-  noticeText: { fontSize: 11, fontWeight: '800', color: '#4A3427' },
+  priceText: { lineHeight: 14 },
   sheetBackdrop: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: 'rgba(40,30,24,0.42)',
@@ -663,28 +916,19 @@ const styles = StyleSheet.create({
     padding: 24,
   },
   huskCard: {
-    backgroundColor: '#FFF9F0',
-    borderRadius: 20,
-    padding: 18,
-    gap: 10,
-    borderWidth: 1.2,
-    borderColor: '#E5D2BC',
+    padding: 14,
+    gap: 8,
     maxWidth: 320,
   },
-  huskTitle: { fontSize: 15, fontWeight: '800', color: '#4A3427' },
-  huskBody: { fontSize: 12, color: '#7B5240', lineHeight: 17 },
+  huskBody: { lineHeight: 17 },
   huskRow: { flexDirection: 'row', gap: 8, marginTop: 4 },
   huskBtn: {
     flex: 1,
     alignItems: 'center',
     paddingVertical: 10,
-    borderRadius: 12,
-    backgroundColor: '#F3E7D9',
-    borderWidth: 1,
-    borderColor: '#E0CBB3',
+    borderWidth: BEVEL,
+    borderRadius: 0,
   },
   huskPrimary: { backgroundColor: '#B8E1C6', borderColor: '#8FC8A4' },
-  huskBtnText: { fontSize: 12, fontWeight: '800', color: '#7B5240' },
-  huskPrimaryText: { color: '#2F6B54' },
   pressed: { transform: [{ translateY: 1 }], opacity: 0.9 },
 });

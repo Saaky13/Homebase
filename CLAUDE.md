@@ -81,7 +81,7 @@ cat cafe/
     │   ├── greenhouseConfig.ts  # Greenhouse geometry — sockets, benches, stations
     │   ├── greenhouseRender.ts  # The room — glass, limewash wall, benches, potting bench
     │   ├── plantImageCache.ts   # Caches species x stage x wet/dry as SkImages
-    │   ├── SeedRackSheet.tsx    # Bottom sheet — the seed packets you buy from
+    │   ├── SeedRackSheet.tsx    # Bottom sheet — a menu, not a shop: picking loads the pot, paying happens at the drop
     │   ├── AdoptionReveal.tsx  # Full-screen reveal after an adoption
     │   ├── CurrencyBar.tsx  # Coins + Pearls bar (unused — replaced by TopBar pills)
     │   ├── FocusSection.tsx # Focus timer UI — a Growth Hub section, on the pixel kit
@@ -311,12 +311,14 @@ interface Plant {
 interface GreenhouseState {
   plants: Plant[];
   benches: number;               // unlocked benches; locked ones draw bare
-  seeds: Record<string, number>; // packets in hand, by species id
   fertilizer: number;
   misting: boolean;              // reservoir keeps plants alive, never grows them
   reservoir: number;
   lastSettledDate: string | null;// dateKey through which thirst was applied
 }
+// No seed stockpile. There used to be a `seeds: Record<string, number>` field;
+// picking from the rack is free now and coins leave at the moment of planting,
+// so there is nothing to hold between the menu and the bench.
 
 interface CafeCustomer {
   id: string;               // unique per visit — `${groupId}-${i}`; the café's cat entity reuses it
@@ -335,7 +337,7 @@ interface CafeVisitState {
 
 type PlantResult =
   | { ok: true; plant: Plant }
-  | { ok: false; reason: 'seed' | 'occupied' | 'locked' };
+  | { ok: false; reason: 'coins' | 'level' | 'occupied' | 'locked' };
 
 type AdoptResult =
   | { ok: true; cat: CatSpec }
@@ -354,7 +356,11 @@ malformed timestamps. `catStats` is squared up with `ownedCats` by
 `userXp` rebuilds it with `backfillUserXp()` from the `dailyStats` pearl
 tallies it was already keeping — the check is an explicit `typeof … ===
 'number'`, because the `{...initialState, ...parsed}` spread would otherwise
-hand a missing key initialState's zero and the backfill would never run.
+hand a missing key initialState's zero and the backfill would never run. A
+save from before the seed stockpile was deleted refunds its packets as coins
+at face value on load (`getPlant(id)?.cost ?? 0` per packet, so a species that
+no longer exists refunds nothing) and the legacy `greenhouse.seeds` key is
+stripped from the merged state.
 
 **Pearls move in exactly one place.** `creditPearls(state, amount, dateKey)` —
 an internal helper beside `creditCoins`, not an exported action — is the only
@@ -365,8 +371,10 @@ mission check-in, the reflection claim, the weekly-review claim, the focus
 settle, `logHabitRep`, `unlogHabitRep` (negative, so un-logging takes the rank
 back too) and `toggleTodo` (negative on the toggle back). See convention 20.
 
-**Initial state:** 100 pearls, 0 coins, level 1, popularity 0, empty habits/logs/todos,
-`ownedCats: [...STARTER_CATS]` (mochi, clover, pebble).
+**Initial state:** 100 pearls, **10 coins** (exactly one Mung Sprout — seeds
+are paid for at the moment of planting, so the greenhouse's old free starter
+packet lives here as its price instead), level 1, popularity 0, empty
+habits/logs/todos, `ownedCats: [...STARTER_CATS]` (mochi, clover, pebble).
 
 **State mutation pattern:** All mutations go through the `commit()` helper which
 calls `setState` + schedules a debounced save. Individual actions (e.g. `logHabitRep`,
@@ -423,8 +431,7 @@ These are the functions available on the context object returned by `useCafeStat
 | `claimAchievement` | `(achievementId, pearlReward) => boolean` | Adds id to `claimedAchievements` + pays pearls, once |
 | `adoptCat` | `() => AdoptResult` | Spends `adoptionCost(ownedCats.length)`, draws an unowned cat, adds it to `ownedCats` |
 | `setRevealActive` | `(active: boolean) => void` | Tells guide overlay to hide during an adoption reveal |
-| `buySeed` | `(speciesId: string) => boolean` | Spends coins, adds a packet to `greenhouse.seeds` |
-| `plantSeed` | `(speciesId, slot) => PlantResult` | Consumes a packet, puts a plant in a socket |
+| `plantSeed` | `(speciesId, slot) => PlantResult` | Spends the species' coin cost and puts a plant in a socket — payment happens at the drop, not at the rack |
 | `waterPlants` | `(plantIds, dateKey?) => {watered, earned, bloom}` | One watering per plant per day; pays the yield at the moment of watering |
 | `harvestPlant` | `(plantId: string) => number` | Collects `pendingCoins`; returns what was paid |
 | `clearHusk` | `(plantId, compost: boolean) => boolean` | Removes a dead plant, composting for a partial refund |
@@ -473,12 +480,23 @@ Coins have three sinks: café quality (which compounds, via the multiplier), the
 shelter (which doesn't compound — it's the collection reward), and the
 greenhouse (which pays coins *back*, but only if you keep showing up).
 
-**The greenhouse loop:** buy a seed → drag the pot onto a bench → water it once
-a day → it sprouts, grows, matures → tap to collect the coins it banked. Miss
-enough days in a row and it dies. Expensive species pay more per watering and
+**The greenhouse loop:** tap the pot to open the seed rack → pick a species
+(free — the pot loads with the seed and a price tag) → drag the pot onto a
+bench, paying the cost the moment it lands → fill the can at the rain barrel →
+sweep it across the plants once a day → they sprout, grow, mature → tap to
+collect the coins they banked, which fly up to the TopBar pill. Miss enough
+days in a row and a plant dies. Expensive species pay more per watering and
 die faster, so the ceiling is set by how reliably you open the app, not by how
 many coins you had on day one. That is the whole point: it is the only part of
 the economy that can go backwards through neglect alone.
+
+The gesture chain deliberately mirrors the café's (pick a drink → fill → drag):
+selecting is free and refusal happens at the moment of truth — an unaffordable
+seed is still selectable with its price shown red, and the drop is what says
+no. There is no seed stockpile: one seed at a time, from hand to bench. The
+can holds `CAN_CAPACITY` (6) waterings and is deliberately not persisted — it
+is empty when you walk in, the way the café's cup is, and filling it at the
+barrel is the first beat of the ritual.
 
 **Focus timer rates:** 1 boba per 60 seconds, 1 pearl per 300 seconds.
 These constants are `SECONDS_PER_BOBA` and `SECONDS_PER_PEARL` in `useCafeState.tsx`.
@@ -1790,11 +1808,16 @@ should generally not be committed with a session-local port.
   inspect card above that bond, and walks out unserved through the side aisle
   rather than back down the queue, costing 2% of standing per cat
 - Persistent state with migrations (legacy array logs → record-based, old habits → tiered,
-  pre-shelter saves → seeded collection)
+  pre-shelter saves → seeded collection, stockpiled seeds → coin refund)
 - Greenhouse: 12 sockets across 3 benches, 9 species with per-species growth
-  and fragility, daily watering by dragging the can, harvest-by-tap, husks and
-  composting, a misting reservoir that keeps plants alive without growing them,
-  and a day/night room lit by sun or by grow lamps
+  and fragility, a seed rack that works like the café's drink picker (pick
+  free, the pot loads with a price tag, coins leave at the drop), a rain
+  barrel the can fills at (6 waterings per fill, empty on entry), daily
+  watering by sweeping the can, harvest-by-tap with coin flights to the
+  TopBar pill, husks and composting, a misting reservoir that keeps plants
+  alive without growing them, a day/night room lit by sun or by grow lamps,
+  and overlays (rack sheet, husk confirm, toasts) on the pixel kit in the
+  room's own seed-paper material (`constants/greenhousePalette.ts`)
 - TopBar with currency pills persistent across all screens
 - Player rank (`constants/userRank.ts`): 10 titles off pearls *earned*, a
   TopBar pill and a Growth Hub panel, backfilled for old saves from

@@ -278,7 +278,7 @@ export const GUIDE_SCRIPT: GuideBeat[] = [
     priority: 67,
     actions: [GOT_IT],
     message: () =>
-      `buy a seed, drag it onto a bench, water it once a day. it pays coins back every watering — and it dies if you disappear long enough. this is the one corner of your café that can go backwards, so I'd start small.`,
+      `pick a seed from the rack, drag the pot onto a bench — you pay when it lands. fill the can at the rain barrel and water everything once a day. plants pay coins back every watering, and they die if you disappear long enough. this is the one corner of your café that can go backwards, so I'd start small.`,
     match: (ctx) => ctx.pathname.includes('/greenhouse'),
   },
   {

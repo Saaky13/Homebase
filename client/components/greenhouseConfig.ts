@@ -100,13 +100,28 @@ export const WATER_RADIUS = 40;
  * bottom of the room rather than the top — the table is bottom-anchored and
  * the benches are not.
  */
-export const CAN_STATION = { x: 332, fromBottom: 70 };
+export const CAN_STATION = { x: 292, fromBottom: 70 };
 export const POT_STATION = { x: 200, fromBottom: 70 };
 /** The seed rack hangs on the backboard above the table, and opens the packets. */
 export const RACK = { x: 20, fromBottom: 154, w: 118, h: 76 };
 /** Table surface — the line both stations rest on. */
 export const TABLE_FROM_BOTTOM = 70;
 
+/**
+ * The rain barrel: a floor barrel standing in front of the table's right end,
+ * directly under where the can rests. The can starts empty and is dipped here
+ * — its top rim deliberately rises above the worktop line so it reads as
+ * standing on the floor in front of the table, not on it.
+ */
+export const BARREL = { x: 352, w: 52, h: 88, fromBottom: 6 };
+/** How close the can's base must come to the barrel's mouth to start filling. */
+export const FILL_RADIUS = 48;
+/** Pots one full can waters. Twelve sockets is two fills, not a chore. */
+export const CAN_CAPACITY = 6;
+
 export const canStationY = (height: number) => height - CAN_STATION.fromBottom;
 export const potStationY = (height: number) => height - POT_STATION.fromBottom;
 export const rackY = (height: number) => height - RACK.fromBottom;
+/** Where the barrel's open mouth sits — the point the can fills from. */
+export const barrelMouthY = (height: number) =>
+  height - BARREL.fromBottom - BARREL.h + 10;
