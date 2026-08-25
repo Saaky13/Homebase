@@ -1,16 +1,23 @@
 import React, { useEffect, useMemo } from 'react';
-import { SafeAreaView, StyleSheet, Text, View } from 'react-native';
+import { SafeAreaView, StyleSheet, View } from 'react-native';
+import { useFonts } from 'expo-font';
 
 import { colors } from '../../constants/colors';
 import GreenhouseCanvasHost from '../../components/GreenhouseCanvasHost';
 import { useCafeState } from '../../hooks/useCafeState';
 import { getPlant, growthStage } from '../../constants/plants';
+import {
+  greenhouseMaterialFor,
+  isNightAt,
+} from '../../constants/greenhousePalette';
+import { PixelText } from '../../components/pixel';
+import { PIXEL_FONT, PIXEL_FONT_FILE, PX } from '../../constants/pixelTheme';
 import { getTodayDateKey } from '../../utils/date';
 
 /**
  * A one-line read on the room, above the glass.
  *
- * Deliberately the only chrome: everything else — buying, planting, watering,
+ * Deliberately the only chrome: everything else — picking, planting, watering,
  * harvesting — happens inside the room itself. This just answers the question
  * you walked in with, which is "does anything need me today".
  */
@@ -18,6 +25,9 @@ function StatusStrip() {
   const { state } = useCafeState();
   const todayKey = getTodayDateKey();
   const plants = state.greenhouse.plants;
+  // Checked per render rather than on a timer: the strip re-renders whenever
+  // the state moves, and a stale half-hour at dusk costs nothing up here.
+  const material = greenhouseMaterialFor(isNightAt());
 
   const summary = useMemo(() => {
     const dead = plants.filter((p) => p.dead).length;
@@ -36,42 +46,44 @@ function StatusStrip() {
 
   if (!plants.length) {
     return (
-      <View style={styles.strip}>
-        <Text style={styles.stripLead}>Nothing planted yet</Text>
-        <Text style={styles.stripText}>
-          Tap the seed rack, then drag the pot onto a bench.
-        </Text>
+      <View style={[styles.strip, { backgroundColor: material.face, borderBottomColor: material.faceDk }]}>
+        <PixelText size={12} color={material.ink}>
+          Nothing planted yet
+        </PixelText>
+        <PixelText plain size={11} color={material.inkDim} style={styles.stripText}>
+          Tap the pot to pick a seed, then drag it onto a bench.
+        </PixelText>
       </View>
     );
   }
 
   return (
-    <View style={styles.strip}>
-      <Text style={styles.stripLead}>
+    <View style={[styles.strip, { backgroundColor: material.face, borderBottomColor: material.faceDk }]}>
+      <PixelText size={12} color={material.ink}>
         {summary.dry > 0
           ? `${summary.dry} ${summary.dry === 1 ? 'plant needs' : 'plants need'} water`
           : 'All watered today'}
-      </Text>
+      </PixelText>
       <View style={styles.chips}>
         {summary.mature > 0 ? (
           <View style={[styles.chip, styles.chipMint]}>
-            <Text style={[styles.chipText, styles.chipMintText]}>
+            <PixelText size={12} color="#2F6B54">
               {summary.mature} mature
-            </Text>
+            </PixelText>
           </View>
         ) : null}
         {summary.ready > 0 ? (
           <View style={[styles.chip, styles.chipGold]}>
-            <Text style={[styles.chipText, styles.chipGoldText]}>
+            <PixelText size={12} color="#7A6230">
               {summary.ready} to collect
-            </Text>
+            </PixelText>
           </View>
         ) : null}
         {summary.dead > 0 ? (
           <View style={[styles.chip, styles.chipDust]}>
-            <Text style={[styles.chipText, styles.chipDustText]}>
+            <PixelText size={12} color="#8A7867">
               {summary.dead} husk{summary.dead === 1 ? '' : 's'}
-            </Text>
+            </PixelText>
           </View>
         ) : null}
       </View>
@@ -82,9 +94,18 @@ function StatusStrip() {
 export default function GreenhouseTab() {
   const { setGuideContext } = useCafeState();
 
+  // Same pattern as the hub and the habit form: the room's overlays are on the
+  // pixel kit now, so the face loads here and the screen holds its first paint
+  // until it resolves — a late swap reflows every label.
+  const [fontLoaded] = useFonts({ [PIXEL_FONT]: PIXEL_FONT_FILE });
+
   useEffect(() => {
     setGuideContext('greenhouse');
   }, [setGuideContext]);
+
+  if (!fontLoaded) {
+    return <SafeAreaView style={styles.container} />;
+  }
 
   return (
     <SafeAreaView style={styles.container}>
@@ -102,19 +123,16 @@ const styles = StyleSheet.create({
     gap: 8,
     paddingHorizontal: 14,
     paddingVertical: 8,
-    backgroundColor: '#FFF9F0',
     borderBottomWidth: 1,
-    borderBottomColor: 'rgba(94,58,70,0.12)',
   },
-  stripLead: { fontSize: 12, fontWeight: '800', color: '#4A3427' },
-  stripText: { fontSize: 11, color: '#8F7C72', flexShrink: 1 },
+  stripText: { flexShrink: 1 },
   chips: { flexDirection: 'row', gap: 5, marginLeft: 'auto' },
-  chip: { borderRadius: 999, paddingHorizontal: 8, paddingVertical: 3 },
-  chipText: { fontSize: 10, fontWeight: '800' },
+  chip: {
+    borderRadius: 0,
+    paddingHorizontal: PX * 4,
+    paddingVertical: PX,
+  },
   chipMint: { backgroundColor: '#D9F5EA' },
-  chipMintText: { color: '#2F6B54' },
   chipGold: { backgroundColor: '#FFE7A3' },
-  chipGoldText: { color: '#7A6230' },
   chipDust: { backgroundColor: '#EDE3D7' },
-  chipDustText: { color: '#8A7867' },
 });

@@ -15,9 +15,9 @@ import type { Ctx2D } from './skiaCanvas2d';
 import { PixelPainter, noise, PX } from './cafePixel';
 import type { GreenhousePalette } from '../constants/greenhousePalette';
 import {
-  BENCH_INSET, BENCH_Y, FLOOR_TOP, HEADBOARD_H, HEADBOARD_TOP, LIP_H, LIP_TOP,
-  RACK, SOCKETS_PER_BENCH, TABLE_FROM_BOTTOM, TROUGH_H, TROUGH_TOP, floorRunY,
-  getSockets,
+  BARREL, BENCH_INSET, BENCH_Y, FLOOR_TOP, HEADBOARD_H, HEADBOARD_TOP, LIP_H,
+  LIP_TOP, RACK, SOCKETS_PER_BENCH, TABLE_FROM_BOTTOM, TROUGH_H, TROUGH_TOP,
+  floorRunY, getSockets,
 } from './greenhouseConfig';
 
 export interface GreenhouseScene {
@@ -592,6 +592,61 @@ function drawPottingTable(p: PixelPainter, scene: GreenhouseScene) {
   p.rect(244, height - 40, 50, 4, pal.seedInk);
   p.rect(250, height - 30, 38, 3, pal.seedInk);
   p.rect(238, height - 12, 62, 12, pal.twine);
+
+  // The rain barrel stands on the floor in front of the table's right end —
+  // drawn last so its rim overlaps the worktop, which is what says "in front
+  // of", the same trick the trough lips play on the pots.
+  drawRainBarrel(p, BARREL.x, height - BARREL.fromBottom, pal);
+}
+
+/**
+ * The rain barrel the can fills from. A galvanised drum with its mouth open
+ * to the roof, standing rainwater visible inside — the room's answer to the
+ * café's brew machine: the water is free, but you have to come get it.
+ */
+function drawRainBarrel(
+  p: PixelPainter,
+  cx: number,
+  baseY: number,
+  pal: GreenhousePalette
+) {
+  const w = BARREL.w;
+  const h = BARREL.h;
+  const top = baseY - h;
+  const x = cx - w / 2;
+
+  // Ground shadow, so it stands on the floor rather than floating over it.
+  p.ellipse(cx, baseY - 2, w / 2 + 5, 6, pal.softShadow);
+
+  // The drum, barrel-shaped: widest at the waist.
+  for (let i = 0; i < h - 4; i += PX) {
+    const t = i / (h - 4);
+    const bulge = Math.round(Math.sin(t * Math.PI) * 3);
+    p.rect(x - bulge, top + 6 + i, w + bulge * 2, PX, pal.zinc);
+  }
+
+  // Vertical ribbing — a rain barrel is corrugated, not smooth.
+  [0.2, 0.45, 0.7].forEach((f) => {
+    p.rect(x + Math.round(w * f), top + 10, PX, h - 20, pal.zincDk);
+  });
+  // Lit left edge, shaded right edge — the same modelling every drum in the
+  // room gets.
+  p.rect(x + 2, top + 10, PX * 2, h - 20, pal.zincLt);
+  p.rect(x + w - 5, top + 10, PX * 2, h - 20, pal.zincDk);
+
+  // Two hoops.
+  [0.24, 0.74].forEach((f) => {
+    const hy = top + Math.round(h * f);
+    p.rect(x - 2, hy, w + 4, 4, pal.zincDk);
+    p.rect(x - 2, hy, w + 4, PX, pal.zincLt);
+  });
+
+  // The open mouth: rolled rim, rainwater standing inside, one shimmer.
+  p.ellipse(cx, top + 6, w / 2 + 2, 7, pal.zincDk);
+  p.ellipse(cx, top + 5, w / 2, 6, pal.zincLt);
+  p.ellipse(cx, top + 6, w / 2 - 4, 5, pal.water);
+  p.ellipse(cx - 4, top + 5, 8, 2, pal.waterLt);
+  p.rect(cx + 8, top + 3, PX * 2, PX, pal.cream);
 }
 
 /** Seed packets in a slotted rack — the shop, sitting in the room. */
@@ -681,9 +736,13 @@ export const CAN_H = 48;
 /**
  * The watering can, drawn into its own small surface rather than into the
  * room. It moves with an `Animated` transform on the view around it, so the
- * pixels are painted once and never redrawn while you drag.
+ * pixels are painted once per *fill level* and never redrawn while you drag.
+ *
+ * `fill` is 0–1: how much water is aboard. It shows through a sight-glass
+ * window let into the drum — the one part of the can that changes — so an
+ * empty can is visibly empty before you ever wonder why nothing pours.
  */
-export function drawWateringCan(ctx: Ctx2D, pal: GreenhousePalette) {
+export function drawWateringCan(ctx: Ctx2D, pal: GreenhousePalette, fill = 1) {
   const p = new PixelPainter(ctx);
 
   // Handle first, so the body's rim overlaps where it meets.
@@ -718,9 +777,21 @@ export function drawWateringCan(ctx: Ctx2D, pal: GreenhousePalette) {
   p.rect(18, 28, 28, PX, pal.zincDk);
   p.rect(19, 36, 26, PX, pal.zincDk);
 
-  // Water at the lip.
-  p.rect(2, 38, 4, 4, pal.water);
-  p.rect(3, 42, PX, PX, pal.waterLt);
+  // The sight glass: a dark well when empty, water stacking up from the
+  // bottom as the can fills at the barrel.
+  p.rect(28, 23, 10, 18, pal.zincDk);
+  p.rect(30, 25, 6, 14, pal.dark);
+  const gauge = Math.round((14 * Math.max(0, Math.min(1, fill))) / PX) * PX;
+  if (gauge > 0) {
+    p.rect(30, 25 + (14 - gauge), 6, gauge, pal.water);
+    p.rect(30, 25 + (14 - gauge), 6, PX, pal.waterLt);
+  }
+
+  // Water at the lip — only when there is any aboard to spill.
+  if (fill > 0) {
+    p.rect(2, 38, 4, 4, pal.water);
+    p.rect(3, 42, PX, PX, pal.waterLt);
+  }
 }
 
 /**

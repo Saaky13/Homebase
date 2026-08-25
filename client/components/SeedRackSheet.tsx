@@ -1,123 +1,160 @@
 import React from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
 import { PLANT_ORDER, PLANT_SPECIES, type PlantSpec } from '../constants/plants';
 import { CoinIcon } from './Icons';
+import { PixelButton, PixelPanel, PixelText } from './pixel';
+import { BEVEL, PX, type PixelMaterial } from '../constants/pixelTheme';
 
 /**
- * The seed rack.
+ * The seed rack — a menu, not a shop.
  *
- * The café taught us the object you drag should live in the room you drag it
- * in. Seeds bought at the Market would mean Market → buy → navigate →
- * greenhouse → drag, which is three screens for a daily ritual, so the shop is
- * here on the potting bench instead. The Market keeps the one-off room
- * upgrades — benches, misting, lamps — which you buy once and never think
- * about again.
+ * It used to sell packets into an invisible stockpile, which meant you could
+ * buy nine Moonflowers without ever touching a pot: the buying and the doing
+ * had come apart. It now works the way the café's recipe sheet does —
+ * **tapping a seed loads the pot and spends nothing.** Coins leave your hand
+ * when the pot lands on a bench, so the gesture chain is pick → carry → pay,
+ * one seed at a time, and there is no inventory to manage or forget.
  *
- * Packets are plain views rather than sprites on purpose. The real plants are
- * on the benches a few pixels away; a second rendering path for tiny previews
- * would be one more thing to keep in sync, and a seed packet is a paper
- * rectangle in real life anyway.
+ * A species you can't afford is still selectable (its price just shows red):
+ * you may be about to harvest the difference, and the refusal belongs at the
+ * drop — the moment of truth — not at the menu. Same rule as the café.
+ *
+ * Drawn on the pixel kit in the greenhouse's own seed-paper material, so the
+ * sheet reads as something picked up off the potting bench rather than a
+ * browser dialog floating over the room.
  */
 
 interface Props {
   coins: number;
   level: number;
-  seeds: Record<string, number>;
   fertilizer: number;
-  onBuy: (speciesId: string) => void;
+  /** The species currently loaded in the pot, if any. */
+  selected: string | null;
+  material: PixelMaterial;
   onSelect: (speciesId: string) => void;
   onClose: () => void;
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
+const WARN = '#C0564E';
+const LEAF = '#5D9B5B';
+
+function Stat({
+  label,
+  value,
+  material,
+}: {
+  label: string;
+  value: string;
+  material: PixelMaterial;
+}) {
   return (
     <View style={styles.stat}>
-      <Text style={styles.statValue}>{value}</Text>
-      <Text style={styles.statLabel}>{label}</Text>
+      <PixelText size={12} color={material.ink} style={styles.statValue}>
+        {value}
+      </PixelText>
+      <PixelText plain size={9} color={material.inkDim}>
+        {label}
+      </PixelText>
     </View>
   );
 }
 
 function Packet({
-  spec, owned, locked, affordable, onBuy, onSelect,
+  spec,
+  loaded,
+  locked,
+  affordable,
+  material,
+  onSelect,
 }: {
   spec: PlantSpec;
-  owned: number;
+  loaded: boolean;
   locked: boolean;
   affordable: boolean;
-  onBuy: () => void;
+  material: PixelMaterial;
   onSelect: () => void;
 }) {
   return (
-    <View style={[styles.packet, locked && styles.packetLocked]}>
+    <PixelButton
+      material={material}
+      behind={material.bg}
+      accent={loaded ? LEAF : undefined}
+      dimmed={locked}
+      disabled={locked}
+      onPress={onSelect}
+      accessibilityRole="button"
+      accessibilityLabel={
+        locked
+          ? `${spec.name} unlocks at level ${spec.level}`
+          : `Load a ${spec.name} into the pot — ${spec.cost} coins when planted`
+      }
+      contentStyle={styles.packetFace}
+    >
       {/* The two-colour band stands in for the plant — leaf green over its
           flower or accent, so species stay distinguishable at a glance. */}
-      <View style={styles.swatch}>
+      <View style={[styles.swatch, { borderColor: material.faceDk }]}>
         <View style={[styles.swatchHalf, { backgroundColor: spec.swatch[0] }]} />
         <View style={[styles.swatchHalf, { backgroundColor: spec.swatch[1] }]} />
       </View>
 
       <View style={styles.packetBody}>
         <View style={styles.packetHead}>
-          <Text style={styles.packetName}>{spec.name}</Text>
-          {owned > 0 ? (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={`Load a ${spec.name} seed into the pot`}
-              onPress={onSelect}
-              style={({ pressed }) => [styles.owned, pressed && styles.pressed]}
-            >
-              <Text style={styles.ownedText}>{owned} in hand</Text>
-            </Pressable>
+          <PixelText size="label" color={material.ink}>
+            {spec.name}
+          </PixelText>
+          {loaded ? (
+            <PixelText size={12} color={LEAF}>
+              in the pot
+            </PixelText>
           ) : null}
         </View>
 
-        <Text style={styles.blurb}>{spec.blurb}</Text>
+        <PixelText plain size={10.5} color={material.inkDim}>
+          {spec.blurb}
+        </PixelText>
 
         <View style={styles.stats}>
-          <Stat label="to mature" value={`${spec.daysToMature}d`} />
-          <Stat label="per water" value={`${spec.coinsPerDay}`} />
+          <Stat material={material} label="to mature" value={`${spec.daysToMature}d`} />
+          <Stat material={material} label="per water" value={`${spec.coinsPerDay}`} />
           {/* The fragility ladder is the point of the expensive plants, so it
               is stated on the packet rather than discovered by losing one. */}
           <Stat
+            material={material}
             label="dies after"
             value={spec.dieAfter === 1 ? '1 dry day' : `${spec.dieAfter} dry`}
           />
         </View>
       </View>
 
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={
-          locked
-            ? `${spec.name} unlocks at level ${spec.level}`
-            : `Buy a ${spec.name} seed for ${spec.cost} coins`
-        }
-        disabled={locked}
-        onPress={onBuy}
-        style={({ pressed }) => [
-          styles.buy,
-          locked && styles.buyLocked,
-          !locked && !affordable && styles.buyPoor,
-          pressed && !locked && styles.pressed,
-        ]}
-      >
+      {/* The price, or the gate. Red is a warning, not a lock — the drop is
+          where an unaffordable seed actually gets refused. */}
+      <View style={styles.price}>
         {locked ? (
-          <Text style={styles.buyLockedText}>Lv {spec.level}</Text>
+          <PixelText size={12} color={material.inkDim}>
+            Lv {spec.level}
+          </PixelText>
         ) : (
           <>
             <CoinIcon size={11} />
-            <Text style={styles.buyText}>{spec.cost}</Text>
+            <PixelText size="label" color={affordable ? material.ink : WARN}>
+              {String(spec.cost)}
+            </PixelText>
           </>
         )}
-      </Pressable>
-    </View>
+      </View>
+    </PixelButton>
   );
 }
 
 export default function SeedRackSheet({
-  coins, level, seeds, fertilizer, onBuy, onSelect, onClose,
+  coins,
+  level,
+  fertilizer,
+  selected,
+  material,
+  onSelect,
+  onClose,
 }: Props) {
   return (
     <View style={styles.backdrop}>
@@ -128,28 +165,32 @@ export default function SeedRackSheet({
         style={StyleSheet.absoluteFill}
       />
 
-      <View style={styles.sheet}>
-        <View style={styles.grab} />
-
+      <PixelPanel material={material} style={styles.sheet}>
         <View style={styles.header}>
-          <Text style={styles.title}>Seed Rack</Text>
+          <PixelText size="title" color={material.ink}>
+            Seed Rack
+          </PixelText>
           <View style={styles.headerRight}>
             {fertilizer > 0 ? (
-              <View style={styles.fert}>
-                <Text style={styles.fertText}>{fertilizer} fertilizer</Text>
+              <View style={[styles.chip, { backgroundColor: material.sunk }]}>
+                <PixelText size={12} color={material.ink}>
+                  {fertilizer} fertilizer
+                </PixelText>
               </View>
             ) : null}
-            <View style={styles.coins}>
+            <View style={[styles.chip, styles.coinChip]}>
               <CoinIcon size={12} />
-              <Text style={styles.coinsText}>{coins}</Text>
+              <PixelText size={12} color="#6B4A16">
+                {String(coins)}
+              </PixelText>
             </View>
           </View>
         </View>
 
-        <Text style={styles.hint}>
-          Buy a seed, then drag the pot onto a bench. Water it every day you show
-          up — growth counts waterings, never days.
-        </Text>
+        <PixelText plain size={11} color={material.inkDim} style={styles.hint}>
+          Tap a seed to load the pot — you pay when it lands on a bench. Water
+          it every day you show up; growth counts waterings, never days.
+        </PixelText>
 
         <ScrollView
           style={styles.list}
@@ -162,27 +203,28 @@ export default function SeedRackSheet({
               <Packet
                 key={id}
                 spec={spec}
-                owned={seeds[id] ?? 0}
+                loaded={selected === id}
                 locked={level < spec.level}
                 affordable={coins >= spec.cost}
-                onBuy={() => onBuy(id)}
-                onSelect={() => {
-                  onSelect(id);
-                  onClose();
-                }}
+                material={material}
+                onSelect={() => onSelect(id)}
               />
             );
           })}
         </ScrollView>
 
-        <Pressable
-          accessibilityRole="button"
+        <PixelButton
+          material={material}
+          behind={material.bg}
           onPress={onClose}
-          style={({ pressed }) => [styles.close, pressed && styles.pressed]}
+          accessibilityRole="button"
+          contentStyle={styles.closeFace}
         >
-          <Text style={styles.closeText}>Back to the bench</Text>
-        </Pressable>
-      </View>
+          <PixelText size="label" color={material.inkDim}>
+            Back to the bench
+          </PixelText>
+        </PixelButton>
+      </PixelPanel>
     </View>
   );
 }
@@ -194,85 +236,66 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
   },
   sheet: {
-    backgroundColor: '#FFF9F0',
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    paddingHorizontal: 14,
-    paddingTop: 8,
-    paddingBottom: 14,
+    paddingHorizontal: 12,
+    paddingTop: 10,
+    paddingBottom: 12,
     maxHeight: '84%',
-    borderTopWidth: 1.2,
-    borderColor: '#E5D2BC',
   },
-  grab: {
-    alignSelf: 'center',
-    width: 40,
-    height: 4,
-    borderRadius: 999,
-    backgroundColor: '#E0CBB3',
-    marginBottom: 10,
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 4,
   },
-  header: { flexDirection: 'row', alignItems: 'center', marginBottom: 4 },
-  headerRight: { flexDirection: 'row', alignItems: 'center', gap: 6, marginLeft: 'auto' },
-  title: { fontSize: 17, fontWeight: '800', color: '#4A3427' },
-  coins: {
-    flexDirection: 'row', alignItems: 'center', gap: 4,
-    backgroundColor: '#F5D273', borderRadius: 999,
-    paddingHorizontal: 9, paddingVertical: 4,
+  headerRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginLeft: 'auto',
   },
-  coinsText: { fontSize: 12, fontWeight: '800', color: '#6B4A16' },
-  fert: {
-    backgroundColor: '#DCE8D4', borderRadius: 999,
-    paddingHorizontal: 9, paddingVertical: 4,
+  chip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: PX * 4,
+    paddingVertical: PX,
+    borderRadius: 0,
   },
-  fertText: { fontSize: 10, fontWeight: '800', color: '#4C6B44' },
-  hint: { fontSize: 11, color: '#8F7C72', lineHeight: 16, marginBottom: 10 },
+  coinChip: { backgroundColor: '#F5D273' },
+  hint: { lineHeight: 16, marginBottom: 10 },
   list: { flexGrow: 0 },
-  listContent: { gap: 8, paddingBottom: 6 },
-  packet: {
+  listContent: { gap: BEVEL * 2, paddingBottom: 6 },
+  packetFace: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
-    backgroundColor: '#FFFDF8',
-    borderRadius: 16,
-    borderWidth: 1.2,
-    borderColor: '#EDDCC6',
-    padding: 10,
+    padding: 8,
   },
-  packetLocked: { opacity: 0.62 },
   swatch: {
-    width: 26, height: 40, borderRadius: 6, overflow: 'hidden',
-    borderWidth: 1, borderColor: 'rgba(78,56,40,0.18)',
+    width: 26,
+    height: 40,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderRadius: 0,
   },
   swatchHalf: { flex: 1 },
-  packetBody: { flex: 1, gap: 3 },
-  packetHead: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  packetName: { fontSize: 13, fontWeight: '800', color: '#4A3427' },
-  owned: {
-    backgroundColor: '#D9F5EA', borderRadius: 999,
-    paddingHorizontal: 7, paddingVertical: 2,
+  packetBody: { flex: 1, gap: 2 },
+  packetHead: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: 8,
   },
-  ownedText: { fontSize: 9, fontWeight: '800', color: '#2F6B54' },
-  blurb: { fontSize: 10.5, color: '#8F7C72' },
   stats: { flexDirection: 'row', gap: 12, marginTop: 2 },
   stat: { flexDirection: 'row', alignItems: 'baseline', gap: 3 },
-  statValue: { fontSize: 11, fontWeight: '800', color: '#7B5240' },
-  statLabel: { fontSize: 9, color: '#A9968B' },
-  buy: {
-    flexDirection: 'row', alignItems: 'center', gap: 4,
-    backgroundColor: '#F5D273', borderRadius: 12,
-    paddingHorizontal: 12, paddingVertical: 9,
-    borderWidth: 1, borderColor: '#DFB955',
+  statValue: { lineHeight: 14 },
+  price: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 6,
   },
-  buyPoor: { opacity: 0.5 },
-  buyLocked: { backgroundColor: '#F3E7D9', borderColor: '#E0CBB3' },
-  buyText: { fontSize: 12, fontWeight: '800', color: '#6B4A16' },
-  buyLockedText: { fontSize: 11, fontWeight: '800', color: '#A9968B' },
-  close: {
-    marginTop: 10, alignItems: 'center',
-    paddingVertical: 11, borderRadius: 14,
-    backgroundColor: '#F3E7D9', borderWidth: 1, borderColor: '#E0CBB3',
+  closeFace: {
+    alignItems: 'center',
+    paddingVertical: 9,
+    marginTop: 10,
   },
-  closeText: { fontSize: 12, fontWeight: '800', color: '#7B5240' },
-  pressed: { transform: [{ translateY: 1 }], opacity: 0.9 },
 });

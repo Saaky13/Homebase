@@ -10,6 +10,7 @@
  */
 
 import { isNightAt } from '../town/palette';
+import type { PixelMaterial } from './pixelTheme';
 
 export interface GreenhousePalette {
   /* white-painted iron frame */
@@ -197,5 +198,44 @@ export const NIGHT_GREENHOUSE = nightGreenhousePalette();
 export function greenhousePaletteFor(night: boolean): GreenhousePalette {
   return night ? NIGHT_GREENHOUSE : DAY_GREENHOUSE;
 }
+
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The greenhouse's pixel-kit material — seed-packet paper.
+ *
+ * The kit is material-parametric on purpose, and the hub's sky paper would
+ * read as a piece of another app floating over this room. The overlays here
+ * (seed rack, husk card, toasts) instead wear the same warm paper the seed
+ * packets and compost sack are drawn in, so a sheet sliding up feels like
+ * something picked up off the potting bench.
+ */
+export const DAY_GREENHOUSE_MATERIAL: PixelMaterial = {
+  bg: '#EBDFC6',
+  face: '#F0E2C4',
+  faceLt: '#FBF2DC',
+  faceDk: '#C9B48D',
+  sunk: '#E3D2AC',
+  ink: '#5A4630',
+  inkDim: '#96805E',
+  track: '#E0CFA9',
+  trackEdge: '#BCA67D',
+};
+
+/** Dusk under the grow lamps — the same paper, one step deeper. */
+export const NIGHT_GREENHOUSE_MATERIAL: PixelMaterial = {
+  bg: '#DCCFB2',
+  face: '#E1D2B0',
+  faceLt: '#F0E2C6',
+  faceDk: '#B7A279',
+  sunk: '#D4C295',
+  ink: '#4C3A26',
+  inkDim: '#8A744F',
+  track: '#D1BF93',
+  trackEdge: '#AB966B',
+};
+
+export const greenhouseMaterialFor = (night: boolean): PixelMaterial =>
+  night ? NIGHT_GREENHOUSE_MATERIAL : DAY_GREENHOUSE_MATERIAL;
 
 export { isNightAt };

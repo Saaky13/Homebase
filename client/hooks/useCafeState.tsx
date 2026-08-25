@@ -87,8 +87,6 @@ export interface GreenhouseState {
   plants: Plant[];
   /** Benches unlocked. The rest are drawn but bare. */
   benches: number;
-  /** Bought and not yet planted, keyed by species. */
-  seeds: Record<string, number>;
   /** From composting a husk; each one skips a growth day. */
   fertilizer: number;
   /** Whether the misting system has been installed. */
@@ -100,7 +98,7 @@ export interface GreenhouseState {
 
 export type PlantResult =
   | { ok: true; plant: Plant }
-  | { ok: false; reason: 'seed' | 'occupied' | 'locked' };
+  | { ok: false; reason: 'coins' | 'level' | 'occupied' | 'locked' };
 
 export interface Habit {
   id: string;
@@ -369,7 +367,11 @@ const initialState: CafeState = {
   // Zero, not 100: the opening pearls are a float to get you started, not work
   // you did. Rank one is meant to be a thing you walk in at.
   userXp: 0,
-  coins: 0,
+  // Exactly one Mung Sprout. Seeds are paid for at the moment of planting, so
+  // the greenhouse's old free starter seed lives here as its price instead —
+  // the three-day clock still starts on your first visit, not after your
+  // first served cat.
+  coins: 10,
   popularity: 0,
   popularityLastDecayedDate: null,
   level: 1,
@@ -426,10 +428,6 @@ const initialState: CafeState = {
     // Two benches is a working greenhouse with room to grow; the third is
     // visible from day one so the upgrade has something to point at.
     benches: 2,
-    // A free starter seed, so the three-day clock starts on your first visit
-    // rather than after a shopping trip — the same reason the collection ships
-    // with three cats.
-    seeds: { mung: 1 },
     fertilizer: 0,
     misting: false,
     reservoir: 0,
@@ -838,7 +836,8 @@ type CafeContextType = {
   // being in the café until they've drunk it and left.
   serveCustomers: (customerIds: string[]) => void;
   setRevealActive: (active: boolean) => void;
-  buySeed: (speciesId: string) => boolean;
+  // Pays for the seed and plants it in one motion — the rack is a menu, not a
+  // shop, and there is no seed inventory to hold.
   plantSeed: (speciesId: string, slot: number) => PlantResult;
   // Waters every pot the can was swept over, and reports the total so the
   // screen can show one summary instead of one toast per plant.
@@ -899,7 +898,14 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
 
         if (saved) {
           const parsed = JSON.parse(saved);
-          // The cafe's queue lived on state before `cafeVisit` became the
+          // Seeds used to be bought ahead and held in a stockpile; a seed is
+          // paid for at the moment the pot lands on a bench now, so whatever a
+          // save was holding refunds at face value. The species roster prices
+          // the refund — an id that has left the roster refunds nothing, the
+          // same way a vanished cat just stops existing.
+          const { seeds: staleSeeds, ...parsedGreenhouse } =
+            parsed.greenhouse ?? {};
+          // The café's queue lived on state before `cafeVisit` became the
           // authority on where every cat is (convention 18). Nothing has read
           // it in a long time; drop it rather than carry it forward, so a save
           // stops describing a queue the app no longer has.
@@ -907,9 +913,22 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
             string,
             unknown
           >;
+          const seedRefund = Object.entries(
+            (staleSeeds ?? {}) as Record<string, number>
+          ).reduce(
+            (sum, [id, count]) =>
+              sum +
+              (getPlant(id)?.cost ?? 0) *
+                (typeof count === 'number' ? Math.max(0, count) : 0),
+            0
+          );
           merged = {
             ...initialState,
             ...parsedRest,
+            coins:
+              (typeof parsed.coins === 'number'
+                ? parsed.coins
+                : initialState.coins) + seedRefund,
             visuals: {
               ...initialState.visuals,
               ...(parsed.visuals ?? {}),
@@ -967,20 +986,15 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
             recipes: Array.isArray(parsed.recipes)
               ? (parsed.recipes as DrinkId[]).filter((id) => !!DRINKS[id])
               : [...STARTER_RECIPES],
-            // Saves from before the greenhouse existed get a fresh one, free
-            // starter seed included. The nested spread matters: a partial
-            // greenhouse from a future rollback would otherwise arrive without
-            // its seeds map and blow up on first read.
+            // Saves from before the greenhouse existed get a fresh one. The
+            // spread comes from the destructure above, which is what strips a
+            // legacy seed stockpile out instead of carrying a dead key forever.
             greenhouse: {
               ...initialState.greenhouse,
-              ...(parsed.greenhouse ?? {}),
+              ...parsedGreenhouse,
               plants: Array.isArray(parsed.greenhouse?.plants)
                 ? parsed.greenhouse.plants
                 : [],
-              seeds: {
-                ...(parsed.greenhouse ? {} : initialState.greenhouse.seeds),
-                ...(parsed.greenhouse?.seeds ?? {}),
-              },
             },
             // Saves from before the café tracked its own room open empty and
             // fill on the first settle below. The nested spread is what keeps a
@@ -2073,56 +2087,27 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
 
   /* ---------------------------- the greenhouse --------------------------- */
 
-  const buySeed = useCallback(
-    (speciesId: string): boolean => {
-      const spec = getPlant(speciesId);
-      if (!spec) return false;
-
-      // Answer from the mirror, not from inside the updater, for the same
-      // reason `plantSeed` and `pullPrize` do: the caller flashes a message off
-      // this result, and React only runs an updater eagerly while its queue is
-      // empty. With anything else already queued the flag was still false when
-      // we returned it, so a purchase that went through reported "not enough
-      // coins" and charged for the seed anyway.
-      const current = stateRef.current;
-      if (current.level < spec.level || current.coins < spec.cost) return false;
-
-      // Advance the mirror before committing so a second tap in the same frame
-      // prices against the spend already in flight rather than stale coins.
-      // The effect that owns stateRef resyncs it on the next render.
-      stateRef.current = { ...current, coins: current.coins - spec.cost };
-
-      commit((prev) => {
-        // `prev` is the authority — the mirror can lag, and React may run this
-        // updater more than once for a single commit.
-        if (prev.level < spec.level || prev.coins < spec.cost) return prev;
-        return {
-          ...prev,
-          coins: prev.coins - spec.cost,
-          greenhouse: {
-            ...prev.greenhouse,
-            seeds: {
-              ...prev.greenhouse.seeds,
-              [speciesId]: (prev.greenhouse.seeds[speciesId] ?? 0) + 1,
-            },
-          },
-        };
-      });
-      return true;
-    },
-    [commit]
-  );
-
+  /**
+   * Plants a seed and pays for it in the same motion. There is no seed
+   * inventory: the rack is a menu, not a shop, and coins leave your hand at
+   * the moment the pot lands on the bench — the same rule the café's brew
+   * machine follows, where selecting is free and pearls are paid on the drop.
+   * Dropping the pot anywhere that isn't a socket costs nothing.
+   */
   const plantSeed = useCallback(
     (speciesId: string, slot: number): PlantResult => {
       const todayKey = getTodayDateKey();
+      const spec = getPlant(speciesId);
+      if (!spec) return { ok: false, reason: 'coins' };
+
       // Decided against the mirror rather than inside the updater, for the same
       // reason `pullPrize` does: the caller animates the result, so it can't
       // depend on whether React ran the updater eagerly or deferred it.
       const current = stateRef.current;
       const gh = current.greenhouse;
 
-      if ((gh.seeds[speciesId] ?? 0) <= 0) return { ok: false, reason: 'seed' };
+      if (current.level < spec.level) return { ok: false, reason: 'level' };
+      if (current.coins < spec.cost) return { ok: false, reason: 'coins' };
       if (gh.plants.some((p) => p.slot === slot)) {
         return { ok: false, reason: 'occupied' };
       }
@@ -2141,19 +2126,24 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
         pendingCoins: 0,
       };
 
+      // Advance the mirror before committing so a second drop in the same
+      // frame prices against the spend already in flight rather than stale
+      // coins. The effect that owns stateRef resyncs it on the next render.
+      stateRef.current = { ...current, coins: current.coins - spec.cost };
+
       commit((prev) => {
         const p = prev.greenhouse;
         // `prev` is the authority — the mirror can lag, and React may run this
         // updater more than once for a single commit.
-        if ((p.seeds[speciesId] ?? 0) <= 0) return prev;
+        if (prev.level < spec.level || prev.coins < spec.cost) return prev;
         if (p.plants.some((x) => x.slot === slot || x.id === plant.id)) return prev;
 
         return {
           ...prev,
+          coins: prev.coins - spec.cost,
           greenhouse: {
             ...p,
             plants: [...p.plants, { ...plant, waterCount: p.fertilizer > 0 ? 1 : 0 }],
-            seeds: { ...p.seeds, [speciesId]: p.seeds[speciesId] - 1 },
             fertilizer: Math.max(0, p.fertilizer - 1),
           },
         };
@@ -2342,7 +2332,6 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
         settleCafeVisitNow,
         serveCustomers,
         setRevealActive,
-        buySeed,
         plantSeed,
         waterPlants,
         harvestPlant,
