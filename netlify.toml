@@ -1,0 +1,27 @@
+# Netlify build + hosting config for the web (PWA) build.
+#
+# `expo export` runs with output: "static", so each route is pre-rendered to
+# its own file (dist/cafe/index.html and so on) and a refresh on /cafe is
+# served directly. The catch-all at the bottom is the safety net beneath that:
+# any path without a prerendered file — a stale deep link, a route added to the
+# router but not yet exported — falls back to the app instead of a 404. Netlify
+# only applies an unforced redirect when no real file matches, so the
+# per-route HTML still wins.
+
+[build]
+  base = "client"
+  command = "npx expo export --platform web"
+  publish = "dist"
+
+# Serve the WASM payload with the right type — CanvasKit is instantiated by
+# streaming compile, which refuses anything that is not application/wasm, and
+# without it the cafe and town screens never paint.
+[[headers]]
+  for = "/canvaskit.wasm"
+  [headers.values]
+    Content-Type = "application/wasm"
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

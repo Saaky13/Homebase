@@ -1,5 +1,5 @@
 import React, { forwardRef, useImperativeHandle, useRef } from 'react';
-import { Animated, Easing, Image, StyleSheet } from 'react-native';
+import { Animated, Easing, StyleSheet } from 'react-native';
 
 import {
   CAPSULE_GRIDS,
@@ -12,13 +12,15 @@ import {
   MACHINE_W,
   TRAY_CENTER,
 } from '../constants/gachaMachine';
-import { gridToSvgUri } from '../utils/pixelSvg';
+import { gridToPaths, type PixelPaths } from '../utils/pixelSvg';
+import { PixelSprite } from './PixelSprite';
 
-// Encoded once at module load — none of this art ever changes.
-const MACHINE_URI = gridToSvgUri(MACHINE_GRID, MACHINE_PALETTE);
-const CRANK_URI = gridToSvgUri(CRANK_GRID, MACHINE_PALETTE);
-const CAPSULE_URIS: Record<string, string> = Object.fromEntries(
-  CAPSULE_KEYS.map((k) => [k, gridToSvgUri(CAPSULE_GRIDS[k], MACHINE_PALETTE)])
+// Walked once at module load — none of this art ever changes, and the shelter
+// mounts this component on every visit.
+const MACHINE_PATHS = gridToPaths(MACHINE_GRID, MACHINE_PALETTE);
+const CRANK_PATHS = gridToPaths(CRANK_GRID, MACHINE_PALETTE);
+const CAPSULE_PATHS: Record<string, PixelPaths> = Object.fromEntries(
+  CAPSULE_KEYS.map((k) => [k, gridToPaths(CAPSULE_GRIDS[k], MACHINE_PALETTE)])
 );
 
 const CRANK_CELLS = CRANK_GRID[0].length;
@@ -143,10 +145,9 @@ const GachaMachine = forwardRef<
         },
       ]}
     >
-      <Image source={{ uri: MACHINE_URI }} style={{ width, height }} />
+      <PixelSprite paths={MACHINE_PATHS} width={width} height={height} />
 
-      <Animated.Image
-        source={{ uri: CRANK_URI }}
+      <Animated.View
         style={[
           styles.overlay,
           {
@@ -164,10 +165,11 @@ const GachaMachine = forwardRef<
             ],
           },
         ]}
-      />
+      >
+        <PixelSprite paths={CRANK_PATHS} width={crankSize} height={crankSize} />
+      </Animated.View>
 
-      <Animated.Image
-        source={{ uri: CAPSULE_URIS[capsuleKey] ?? CAPSULE_URIS['1'] }}
+      <Animated.View
         style={[
           styles.overlay,
           {
@@ -185,7 +187,13 @@ const GachaMachine = forwardRef<
             ],
           },
         ]}
-      />
+      >
+        <PixelSprite
+          paths={CAPSULE_PATHS[capsuleKey] ?? CAPSULE_PATHS['1']}
+          width={capsuleSize}
+          height={capsuleSize}
+        />
+      </Animated.View>
     </Animated.View>
   );
 });
