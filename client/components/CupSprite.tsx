@@ -16,6 +16,13 @@ import { PixelSprite } from './PixelSprite';
  * see convention 12.
  */
 
+/**
+ * Height over width of every vessel grid (20x30 in `constants/vessels.ts`).
+ * `CafeCanvas` sizes the draggable cup's touch target from this, so the box it
+ * drags matches the art `PixelSprite` derives from the same grid.
+ */
+export const CUP_ASPECT = 30 / 20;
+
 /** Fill is quantised so a scrolling rail reuses four path sets, not forty. */
 const FILL_STEPS = 4;
 

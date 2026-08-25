@@ -97,16 +97,16 @@ export const BUILDINGS: BuildingSpec[] = [
   // The five anonymous cottages that used to fill this band are gone — they
   // were doors that don't open, and deleting them bought every building that
   // stayed a tile or two in each direction and let the whole town pull tighter.
-  { id: 'inn', tx: 22, ty: 12, tw: 6, th: 6, color: 'h', roof: 'mansard', win: 'big', door: 'mid', chimney: true, label: 'Inn' },
-  { id: 'shrine', tx: 13, ty: 19, tw: 6, th: 5, color: 'h', roof: 'gable', win: 'big', door: 'mid', sign: true, label: 'Shrine' },
-  { id: 'grocer', tx: 24, ty: 21, tw: 6, th: 6, color: 'a', roof: 'gable', win: 'lg', door: 'std', sign: true, awning: true, label: 'Grocer' },
+  { id: 'inn', tx: 22, ty: 12, tw: 6, th: 6, color: 'h', roof: 'mansard', win: 'big', door: 'mid', chimney: true },
+  { id: 'shrine', tx: 13, ty: 19, tw: 6, th: 5, color: 'h', roof: 'gable', win: 'big', door: 'mid', sign: true },
+  { id: 'grocer', tx: 24, ty: 21, tw: 6, th: 6, color: 'a', roof: 'gable', win: 'lg', door: 'std', sign: true, awning: true },
 
   // The middle stretch — still scenery, but close enough to the town proper
   // that it reads as approach rather than countryside.
-  { id: 'workshop', tx: 21, ty: 31, tw: 6, th: 5, color: 'h', roof: 'flat', win: 'lg', door: 'wide', label: 'Workshop' },
-  { id: 'bakery', tx: 12, ty: 33, tw: 6, th: 5, color: 'g', roof: 'hip', win: 'big', door: 'mid', sign: true, label: 'Bakery' },
-  { id: 'observatory', tx: 31, ty: 33, tw: 5, th: 6, color: 'f', roof: 'peak', win: 'arch', door: 'mid', label: 'Observatory' },
-  { id: 'nursery', tx: 19, ty: 39, tw: 6, th: 5, color: 'f', roof: 'gable', win: 'big', door: 'mid', sign: true, label: 'Nursery' },
+  { id: 'workshop', tx: 21, ty: 31, tw: 6, th: 5, color: 'h', roof: 'flat', win: 'lg', door: 'wide' },
+  { id: 'bakery', tx: 12, ty: 33, tw: 6, th: 5, color: 'g', roof: 'hip', win: 'big', door: 'mid', sign: true },
+  { id: 'observatory', tx: 31, ty: 33, tw: 5, th: 6, color: 'f', roof: 'peak', win: 'arch', door: 'mid' },
+  { id: 'nursery', tx: 19, ty: 39, tw: 6, th: 5, color: 'f', roof: 'gable', win: 'big', door: 'mid', sign: true },
 
   // The town proper. Every route in the app is below this line, and the two
   // you open most — the Growth Hub's fountain and the café — are the lowest.

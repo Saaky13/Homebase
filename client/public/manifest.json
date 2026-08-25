@@ -1,0 +1,12 @@
+{
+  "name": "Homebase",
+  "short_name": "Homebase",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#FFF7F2",
+  "theme_color": "#FFF7F2",
+  "orientation": "portrait",
+  "icons": [
+    { "src": "/icon.png", "sizes": "1024x1024", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

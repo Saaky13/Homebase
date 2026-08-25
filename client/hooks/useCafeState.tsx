@@ -47,7 +47,7 @@ import {
   emptyCatStat,
   type CatStat,
 } from '../constants/catLore';
-import { getCat, type CatSpec } from '../constants/catSprites';
+import { getCat } from '../constants/catSprites';
 import { serveOutcome } from '../constants/affinity';
 import {
   getPlant,
@@ -101,15 +101,6 @@ export interface GreenhouseState {
 export type PlantResult =
   | { ok: true; plant: Plant }
   | { ok: false; reason: 'seed' | 'occupied' | 'locked' };
-
-export interface QueueCat {
-  id: number;
-  name: string;
-  emoji: string;
-  type: string;
-  waitTime: number;
-  joinedAt: number;
-}
 
 export interface Habit {
   id: string;
@@ -244,7 +235,6 @@ export interface CafeState {
     strawberry: number;
   };
   unlockedItems: string[];
-  queue: QueueCat[];
   totalFocusMinutes: number;
   upgrades: {
     counter: number;
@@ -389,7 +379,6 @@ const initialState: CafeState = {
     strawberry: 0,
   },
   unlockedItems: [],
-  queue: [],
   totalFocusMinutes: 0,
   upgrades: {
     counter: 0,
@@ -814,8 +803,6 @@ type CafeContextType = {
   addPopularity: (amount: number) => void;
   addDrinkServed: (amount?: number) => void;
   addBoba: (type: 'classic' | 'matcha' | 'strawberry', amount?: number) => void;
-  addCatToQueue: (cat: Omit<QueueCat, 'id' | 'joinedAt' | 'waitTime'>) => void;
-  updateQueueWaitTimes: () => void;
   unlockItem: (itemId: string) => boolean;
   applyVisualUpgrade: (
     type: keyof CafeVisuals,
@@ -912,9 +899,17 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
 
         if (saved) {
           const parsed = JSON.parse(saved);
+          // The cafe's queue lived on state before `cafeVisit` became the
+          // authority on where every cat is (convention 18). Nothing has read
+          // it in a long time; drop it rather than carry it forward, so a save
+          // stops describing a queue the app no longer has.
+          const { queue: staleQueue, ...parsedRest } = parsed as Record<
+            string,
+            unknown
+          >;
           merged = {
             ...initialState,
-            ...parsed,
+            ...parsedRest,
             visuals: {
               ...initialState.visuals,
               ...(parsed.visuals ?? {}),
@@ -1298,34 +1293,6 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
     },
     [commit]
   );
-
-  const addCatToQueue = useCallback(
-    (cat: Omit<QueueCat, 'id' | 'joinedAt' | 'waitTime'>) => {
-      commit((prev) => ({
-        ...prev,
-        queue: [
-          ...prev.queue,
-          {
-            ...cat,
-            id: Date.now() + Math.floor(Math.random() * 1000),
-            joinedAt: Date.now(),
-            waitTime: 0,
-          },
-        ],
-      }));
-    },
-    [commit]
-  );
-
-  const updateQueueWaitTimes = useCallback(() => {
-    commit((prev) => ({
-      ...prev,
-      queue: prev.queue.map((cat) => ({
-        ...cat,
-        waitTime: Math.floor((Date.now() - cat.joinedAt) / 60000),
-      })),
-    }));
-  }, [commit]);
 
   const unlockItem = useCallback(
     (itemId: string) => {
@@ -2353,8 +2320,6 @@ export function CafeProvider({ children }: { children: React.ReactNode }) {
         addPopularity,
         addDrinkServed,
         addBoba,
-        addCatToQueue,
-        updateQueueWaitTimes,
         unlockItem,
         applyVisualUpgrade,
         addHabit,
