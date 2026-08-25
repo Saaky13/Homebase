@@ -1,13 +1,3 @@
-export const CATS_DATA = [
-  { name: 'Luna', emoji: '🐈‍⬛', type: 'cat-black' },
-  { name: 'Whiskers', emoji: '🧡', type: 'cat-orange' },
-  { name: 'Mittens', emoji: '🤍', type: 'cat-white' },
-  { name: 'Sage', emoji: '💚', type: 'cat-green' },
-  { name: 'Jazz', emoji: '🟠', type: 'cat-ginger' },
-  { name: 'Shadow', emoji: '⬛', type: 'cat-shadow' },
-  { name: 'Sunny', emoji: '🌟', type: 'cat-sunny' },
-];
-
 // The Market used to sell three cats that only ever incremented a counter.
 // Cats now come from the Cat Shelter, where they're real roster cats you
 // actually own. Existing saves migrate their purchases into the collection —

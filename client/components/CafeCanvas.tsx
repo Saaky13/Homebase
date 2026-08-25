@@ -41,13 +41,12 @@ import {
 import { snap } from './cafePixel';
 import { cafePaletteFor, isNightAt } from '../constants/cafePalette';
 import { hasJoined, type CafeCustomer } from '../constants/cafeVisit';
-import { CUP_ASPECT } from './BobaCupSprite';
 import { PearlIcon } from './Icons';
 import { getCat } from '../constants/catSprites';
 import { bondTip } from '../constants/bonds';
 import { serveOutcome } from '../constants/affinity';
 import { DRINKS, STARTER_RECIPES, type DrinkId } from '../constants/drinks';
-import { CupSprite } from './CupSprite';
+import { CupSprite, CUP_ASPECT } from './CupSprite';
 import { RecipeSheet } from './RecipeSheet';
 import type { CatStat } from '../constants/catLore';
 import CatInspectCard, { CARD_H_ESTIMATE, anchorCard } from './CatInspectCard';
