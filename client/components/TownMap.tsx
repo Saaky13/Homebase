@@ -79,7 +79,21 @@ function roamerBox(r: Roamer): { x: number; y: number; w: number; h: number } | 
 export default function TownMap({ night }: { night?: boolean }) {
   const canvasRef = useRef<any>(null);
   const router = useRouter();
-  const { width } = useWindowDimensions();
+  const { width: windowWidth } = useWindowDimensions();
+
+  /**
+   * `useWindowDimensions` reports 0 in the static web export: the bundle is
+   * evaluated once in Node to prerender each route, where there is no window,
+   * and the hydrated client never re-measures because no resize event fires.
+   * A width of 0 makes `scale` 0, which lays the canvas out at 0x0 - the town
+   * paints perfectly into a backing store nobody can see, and the screen is
+   * the ScrollView's green background.
+   *
+   * So measure the box we are actually given, the way `CafeCanvas` already
+   * does, and keep the window as the pre-layout seed.
+   */
+  const [measuredWidth, setMeasuredWidth] = useState(0);
+  const width = measuredWidth || windowWidth || MAP_PX_W;
 
   const { state, isLoading } = useCafeState();
 
@@ -120,7 +134,7 @@ export default function TownMap({ night }: { night?: boolean }) {
   }, [state.cafeVisit]);
 
   // The map is 384px wide; narrower phones scale it down rather than clip.
-  const scale = Math.min(1, width / MAP_PX_W);
+  const scale = width > 0 ? Math.min(1, width / MAP_PX_W) : 1;
 
   // `stepRoamers` mutates this array in place every frame — the ref just
   // needs to point at whatever `createRoamers` built for the live effect, so
@@ -411,6 +425,12 @@ export default function TownMap({ night }: { night?: boolean }) {
   return (
       <ScrollView
         style={styles.scroll}
+        onLayout={(e) => {
+          // Guarded: an unconditional setState here re-renders on every
+          // layout pass, and a re-render triggers another layout.
+          const w = e.nativeEvent.layout.width;
+          setMeasuredWidth((prev) => (Math.abs(prev - w) > 0.5 ? w : prev));
+        }}
         contentContainerStyle={[
           styles.content,
           { backgroundColor: isNight ? '#4A5570' : '#A8C98C' },
