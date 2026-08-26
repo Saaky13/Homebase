@@ -93,33 +93,32 @@ export const GREENHOUSE = { tx: 28, ty: 68, tw: 9, th: 6 } as const;
  * places you go.
  */
 export const BUILDINGS: BuildingSpec[] = [
-  // Outskirts. None of these are interactive; they're the town's character.
-  // The five anonymous cottages that used to fill this band are gone — they
-  // were doors that don't open, and deleting them bought every building that
-  // stayed a tile or two in each direction and let the whole town pull tighter.
-  { id: 'inn', tx: 22, ty: 12, tw: 6, th: 6, color: 'h', roof: 'mansard', win: 'big', door: 'mid', chimney: true },
-  { id: 'shrine', tx: 13, ty: 19, tw: 6, th: 5, color: 'h', roof: 'gable', win: 'big', door: 'mid', sign: true },
-  { id: 'grocer', tx: 24, ty: 21, tw: 6, th: 6, color: 'a', roof: 'gable', win: 'lg', door: 'std', sign: true, awning: true },
+  // Every building here has a route — the unnamed scenery buildings (inn,
+  // shrine, grocer, workshop, bakery, observatory, nursery) are gone.
+  // Removing them freed the full map height so the six destinations plus the
+  // fountain and greenhouse can breathe, spread evenly from north to south.
 
-  // The middle stretch — still scenery, but close enough to the town proper
-  // that it reads as approach rather than countryside.
-  { id: 'workshop', tx: 21, ty: 31, tw: 6, th: 5, color: 'h', roof: 'flat', win: 'lg', door: 'wide' },
-  { id: 'bakery', tx: 12, ty: 33, tw: 6, th: 5, color: 'g', roof: 'hip', win: 'big', door: 'mid', sign: true },
-  { id: 'observatory', tx: 31, ty: 33, tw: 5, th: 6, color: 'f', roof: 'peak', win: 'arch', door: 'mid' },
-  { id: 'nursery', tx: 19, ty: 39, tw: 6, th: 5, color: 'f', roof: 'gable', win: 'big', door: 'mid', sign: true },
+  // Library — northernmost, largest Growth Hub entry. Planted far up so the
+  // first thing you see scrolling in is somewhere to go.
+  { id: 'library', tx: 4, ty: 10, tw: 10, th: 8, color: 'b', roof: 'peak', win: 'arch', door: 'arch', sign: true, chimney: true, label: 'Library', route: '/habits' },
 
-  // The town proper. Every route in the app is below this line, and the two
-  // you open most — the Growth Hub's fountain and the café — are the lowest.
-  { id: 'market', tx: 30, ty: 45, tw: 6, th: 5, color: 'b', roof: 'flat', win: 'lg', door: 'std', awning: true, label: 'Market', route: '/shop' },
-  // Second only to the café. Thirty-six cats live here; a four-tile cottage
-  // read like somewhere you'd keep two.
-  { id: 'shelter', tx: 16, ty: 45, tw: 8, th: 6, color: 'd', roof: 'gable', win: 'arch', door: 'arch', sign: true, awning: true, label: 'Cat Shelter', route: '/cats' },
-  { id: 'library', tx: 4, ty: 52, tw: 7, th: 6, color: 'b', roof: 'peak', win: 'arch', door: 'arch', sign: true, chimney: true, label: 'Library', route: '/habits' },
-  // The biggest building in town, and the only one that earns it — the café is
-  // where the whole economy cashes out.
-  { id: 'cafe', tx: 27, ty: 52, tw: 9, th: 8, color: 'a', roof: 'gable', win: 'lg', door: 'std', sign: true, awning: true, label: 'Café', route: '/cafe' },
-  { id: 'mission', tx: 13, ty: 51, tw: 6, th: 6, color: 'e', roof: 'mansard', win: 'big', door: 'mid', sign: true, label: 'Mission Hall', route: '/habits' },
-  { id: 'archive', tx: 25, ty: 61, tw: 6, th: 5, color: 'h', roof: 'gable', win: 'big', door: 'mid', label: 'Archive', route: '/habits' },
+  // Cat Shelter — upper right. Wide enough to feel like it houses thirty-six
+  // cats rather than two.
+  { id: 'shelter', tx: 28, ty: 20, tw: 11, th: 8, color: 'd', roof: 'gable', win: 'arch', door: 'arch', sign: true, awning: true, label: 'Cat Shelter', route: '/cats' },
+
+  // Market — mid left.
+  { id: 'market', tx: 4, ty: 34, tw: 9, th: 7, color: 'b', roof: 'flat', win: 'lg', door: 'std', awning: true, label: 'Market', route: '/shop' },
+
+  // Mission Hall — mid right.
+  { id: 'mission', tx: 28, ty: 43, tw: 9, th: 7, color: 'e', roof: 'mansard', win: 'big', door: 'mid', sign: true, label: 'Mission Hall', route: '/habits' },
+
+  // Archive — lower left, above the fountain square.
+  { id: 'archive', tx: 4, ty: 54, tw: 9, th: 7, color: 'h', roof: 'gable', win: 'big', door: 'mid', label: 'Archive', route: '/habits' },
+
+  // Café — the biggest building in town, and the only one that earns it.
+  // 12×10 so it reads as the centrepiece it is: the whole economy cashes
+  // out here, the cats come here, this is where you spend your focus.
+  { id: 'cafe', tx: 25, ty: 52, tw: 13, th: 11, color: 'a', roof: 'gable', win: 'lg', door: 'std', sign: true, awning: true, label: 'Café', route: '/cafe' },
 ];
 
 /**
@@ -129,7 +128,8 @@ export const BUILDINGS: BuildingSpec[] = [
  * — this one sits on the northern approach, clear of every footprint by a tile.
  */
 export const EMPTY_PLOTS: Array<{ ty: number; tx: number }> = [
-  { ty: 15, tx: 16 },
+  { ty: 16, tx: 19 },
+  { ty: 30, tx: 18 },
 ];
 
 interface Grove { cy: number; cx: number; r: number; kind: TreeKind }
@@ -175,21 +175,33 @@ export function buildTownGrid(): Tile[][] {
       }
   };
 
-  // The paved area is a union of blobs, so the town's outline stays ragged.
-  // Weighted south: the biggest lobes are the lowest, so the town has real mass
-  // under the thumb instead of a narrow tail of paving.
-  ([[17, 22, 8, 11], [27, 22, 8, 13], [38, 22, 8, 14], [37, 31, 7, 8],
-    [49, 24, 8, 16], [58, 22, 9, 16], [56, 10, 8, 9],
-    // The fountain square and the greenhouse yard.
-    [68, 16, 8, 12], [69, 31, 7, 10]] as const)
-    .forEach(([cy, cx, ry, rx]) => ellipse(cy, cx, ry, rx, 'S'));
+  // Paving blobs — centred on each building cluster, covering the footprint
+  // plus a plaza apron. Set BEFORE streets so road tiles always win.
+  // (Green pockets were formerly applied after streets, overwriting road tiles
+  // back to grass and letting trees grow on roads — removed.)
+  ([[14, 9,  6, 12],   // Library     (tx=4,  ty=10, tw=10, th=8)
+    [24, 34, 7, 12],   // Cat Shelter (tx=28, ty=20, tw=11, th=8)
+    [37, 8,  6, 12],   // Market      (tx=4,  ty=34, tw=9,  th=7)
+    [46, 32, 6, 11],   // Mission Hall(tx=28, ty=43, tw=9,  th=7)
+    [57, 8,  6, 11],   // Archive     (tx=4,  ty=54, tw=9,  th=7)
+    [57, 31, 8, 13],   // Café        (tx=25, ty=52, tw=13, th=11)
+    [68, 18, 8, 13],   // Fountain square
+    [71, 33, 6, 10],   // Greenhouse yard
+  ] as const).forEach(([cy, cx, ry, rx]) => ellipse(cy, cx, ry, rx, 'S'));
 
   // Rock shelf with a modest fall into a pool.
   rect(30, 0, 14, 5, 'C');
   rect(34, 3, 3, 5, 'W');
   ellipse(10, 36, 3, 5, 'W');
 
-  // Streets wander through waypoints rather than running straight.
+  // Streets. Each point is [tx, ty]. The helper draws an L-shape between each
+  // adjacent pair — horizontal leg first, then vertical corner.
+  //
+  // Layout guarantees (no segment runs through a building):
+  //   Library ends ty=17; Shelter starts ty=20 → y=18 corridor is clear.
+  //   All left buildings end tx≤13 → left spine at tx=14 is always clear.
+  //   All right buildings end tx≤38 → right spine at tx=39 is always clear.
+  //   Market ends ty=40; Mission starts ty=43 → y=41 cross is clear.
   const street = (pts: Array<[number, number]>, w: number) => {
     for (let k = 0; k < pts.length - 1; k++) {
       const [ax, ay] = pts[k], [bx, by] = pts[k + 1];
@@ -197,13 +209,18 @@ export function buildTownGrid(): Tile[][] {
       rect(bx, Math.min(ay, by), w, Math.abs(by - ay) + w, 'R');
     }
   };
-  // The spine runs the length of the map and finishes at the fountain square.
-  street([[20, 10], [20, 28], [10, 28], [10, 51], [22, 51], [22, 62], [16, 62]], 2);
-  street([[20, 19], [37, 19], [37, 44]], 2);
-
-  // Pockets left deliberately empty.
-  ([[15, 7, 5, 5], [28, 38, 4, 5], [45, 8, 5, 5], [63, 41, 4, 5]] as const)
-    .forEach(([cy, cx, ry, rx]) => ellipse(cy, cx, ry, rx, 'G'));
+  // Left spine: below Library (y=18) straight down to Fountain (y=65).
+  street([[14, 18], [14, 65]], 2);
+  // Top cross: clear corridor at y=18 between Library and Shelter.
+  street([[14, 18], [39, 18]], 2);
+  // Right spine: y=18 down to y=63, right of Shelter, Mission, and Café.
+  street([[39, 18], [39, 63]], 2);
+  // Mid cross: below Market (ty+th=41), above Mission (ty=43).
+  street([[14, 41], [28, 41]], 2);
+  // Lower cross: left spine to Café's west face.
+  street([[14, 52], [25, 52]], 2);
+  // Fountain stub.
+  street([[14, 65], [16, 65]], 2);
 
   EMPTY_PLOTS.forEach((p) => ellipse(p.ty, p.tx, 2, 3, 'o'));
 
