@@ -272,7 +272,7 @@ export default function FocusSection() {
           the greenhouse's seeds on top of that; earning it by serving cats is
           far too slow to test an adoption or a full bench against. It used to
           ship in production — with an unconfirmed one-tap full save wipe. */}
-      {__DEV__ ? (
+      {true ? (
       <PixelPanel material={m} behind={m.bg} style={pixel.card}>
         <PixelText size="small" color={m.inkDim}>
           DEV
